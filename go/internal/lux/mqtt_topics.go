@@ -45,7 +45,9 @@ var InputMQTTTopics = map[uint16][]MQTTMapping{
 		{"inverter_1/ac_output_frequency", fmtDiv100},
 	},
 	64:  {{"inverter_1/temperature", fmtDiv10}},
-	106: {{"inverter_1/battery_current", fmtDiv100}},
+	// Register 106 removed: inverter-estimated battery current is unreliable
+	// (reports non-zero when both BMS units read 0A). Battery current is now
+	// computed in ComputedTopics from charge/discharge power and voltage.
 }
 
 // HoldingMQTTTopics maps holding register numbers to their Solar Assistant topic(s).
@@ -131,6 +133,18 @@ func ComputedTopics(regs map[uint16]uint16) map[string]string {
 	// Load power = inverter power
 	if v, ok := regs[16]; ok {
 		result["inverter_1/load_power"] = fmt.Sprintf("%d", v)
+	}
+
+	// Battery current = (charge_power - discharge_power) / battery_voltage
+	// Derived from registers 10, 11, 4 which match BMS readings.
+	// Positive = charging, negative = discharging.
+	if voltage, vOk := regs[4]; vOk && voltage > 0 {
+		chgP, chgPOk := regs[10]
+		disP, disPOk := regs[11]
+		if chgPOk && disPOk {
+			current := (float64(chgP) - float64(disP)) / (float64(voltage) / 10)
+			result["inverter_1/battery_current"] = fmt.Sprintf("%.1f", current)
+		}
 	}
 
 	// Battery temperature from register 67 (raw)
