@@ -8,22 +8,22 @@ import (
 // Register 21 Master Function bitmask constants.
 // Use read-modify-write pattern: fetch current value, flip bits, write back.
 const (
-	MasterEPSEnable        = 1 << 0  // EPS (Emergency Power Supply)
-	MasterOverloadDerate   = 1 << 1  // Overload derate
-	MasterDRMS             = 1 << 2  // DRMS
-	MasterLVRT             = 1 << 3  // Low voltage ride-through
-	MasterAntiIsland       = 1 << 4  // Anti-islanding
-	MasterNeutralDetect    = 1 << 5  // Neutral detection
-	MasterGridOnPowerSS    = 1 << 6  // Grid-on power soft start
-	MasterACChargeEnable   = 1 << 7  // AC (grid) charging enable
-	MasterSeamlessEPS      = 1 << 8  // Seamless EPS switching
-	MasterStandby          = 1 << 9  // Standby mode
-	MasterForcedDischarge  = 1 << 10 // Forced discharge enable
-	MasterChargePriority   = 1 << 11 // Charge priority enable
-	MasterISO              = 1 << 12 // Isolation detection
-	MasterGFCI             = 1 << 13 // Ground fault circuit interrupter
-	MasterDCI              = 1 << 14 // DC injection detection
-	MasterFeedInGrid       = 1 << 15 // Feed-in to grid enable
+	MasterEPSEnable       = 1 << 0  // EPS (Emergency Power Supply)
+	MasterOverloadDerate  = 1 << 1  // Overload derate
+	MasterDRMS            = 1 << 2  // DRMS
+	MasterLVRT            = 1 << 3  // Low voltage ride-through
+	MasterAntiIsland      = 1 << 4  // Anti-islanding
+	MasterNeutralDetect   = 1 << 5  // Neutral detection
+	MasterGridOnPowerSS   = 1 << 6  // Grid-on power soft start
+	MasterACChargeEnable  = 1 << 7  // AC (grid) charging enable
+	MasterSeamlessEPS     = 1 << 8  // Seamless EPS switching
+	MasterStandby         = 1 << 9  // Standby mode
+	MasterForcedDischarge = 1 << 10 // Forced discharge enable
+	MasterChargePriority  = 1 << 11 // Charge priority enable
+	MasterISO             = 1 << 12 // Isolation detection
+	MasterGFCI            = 1 << 13 // Ground fault circuit interrupter
+	MasterDCI             = 1 << 14 // DC injection detection
+	MasterFeedInGrid      = 1 << 15 // Feed-in to grid enable
 )
 
 // RegisterDef defines a register with its human-readable name, scaling divisor, and unit.
@@ -387,14 +387,14 @@ var InputRegisters = map[uint16]RegisterDef{
 // HoldingRegisters maps holding register numbers to their definitions.
 var HoldingRegisters = map[uint16]RegisterDef{
 	// System config - identifiers have no range
-	0:  {"Model (lo)", "Inverter model identifier, low word", 0, "", "ident", nil, nil, 0, 0, false},
-	1:  {"Model (hi)", "Inverter model identifier, high word", 0, "", "ident", nil, nil, 0, 0, false},
-	2:  {"Serial 1", "Serial number chars 1-2", 0, "", "ident", nil, nil, 0, 0, false},
-	3:  {"Serial 2", "Serial number chars 3-4", 0, "", "ident", nil, nil, 0, 0, false},
-	4:  {"Serial 3", "Serial number chars 5-6", 0, "", "ident", nil, nil, 0, 0, false},
-	5:  {"Serial 4", "Serial number chars 7-8", 0, "", "ident", nil, nil, 0, 0, false},
-	6:  {"Serial 5", "Serial number chars 9-10", 0, "", "ident", nil, nil, 0, 0, false},
-	7:  {"Firmware Code", "Firmware version identifier", 0, "", "ident", nil, nil, 0, 0, false},
+	0: {"Model (lo)", "Inverter model identifier, low word", 0, "", "ident", nil, nil, 0, 0, false},
+	1: {"Model (hi)", "Inverter model identifier, high word", 0, "", "ident", nil, nil, 0, 0, false},
+	2: {"Serial 1", "Serial number chars 1-2", 0, "", "ident", nil, nil, 0, 0, false},
+	3: {"Serial 2", "Serial number chars 3-4", 0, "", "ident", nil, nil, 0, 0, false},
+	4: {"Serial 3", "Serial number chars 5-6", 0, "", "ident", nil, nil, 0, 0, false},
+	5: {"Serial 4", "Serial number chars 7-8", 0, "", "ident", nil, nil, 0, 0, false},
+	6: {"Serial 5", "Serial number chars 9-10", 0, "", "ident", nil, nil, 0, 0, false},
+	7: {"Firmware Code", "Firmware version identifier", 0, "", "ident", nil, nil, 0, 0, false},
 
 	// Time registers - no range validation
 	12: {"Time Month/Year", "Clock: month (hi byte) / year-2000 (lo byte)", 0, "", "clock_my", nil, nil, 0, 0, false},
@@ -622,7 +622,7 @@ func IsProtectedRegister(reg uint16) bool {
 
 // RegisterMatch represents a register found by name search.
 type RegisterMatch struct {
-	Type   string      // "holding" or "input"
+	Type   string // "holding" or "input"
 	Number uint16
 	Def    RegisterDef
 }

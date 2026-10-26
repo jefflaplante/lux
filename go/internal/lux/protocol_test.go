@@ -32,7 +32,7 @@ func TestCRC16Modbus(t *testing.T) {
 func TestDecodeHeartbeat(t *testing.T) {
 	// Build a heartbeat packet
 	pkt := make([]byte, 18)
-	pkt[0], pkt[1] = 0xa1, 0x1a // Header
+	pkt[0], pkt[1] = 0xa1, 0x1a                 // Header
 	binary.LittleEndian.PutUint16(pkt[2:4], 5)  // Protocol
 	binary.LittleEndian.PutUint16(pkt[4:6], 12) // Frame length
 	pkt[6] = 0x01                               // Unknown
@@ -567,7 +567,7 @@ func TestDecodeReadInputResponse(t *testing.T) {
 	pkt[21] = ModbusReadInput
 	copy(pkt[22:32], "1234567890")
 	binary.LittleEndian.PutUint16(pkt[32:34], 0) // start reg
-	pkt[34] = 4                                   // VLB: 4 bytes = 2 regs
+	pkt[34] = 4                                  // VLB: 4 bytes = 2 regs
 	binary.LittleEndian.PutUint16(pkt[35:37], 0x04)
 	binary.LittleEndian.PutUint16(pkt[37:39], 3500)
 	crc := CRC16Modbus(pkt[20:39])

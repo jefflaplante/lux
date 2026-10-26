@@ -9,11 +9,11 @@ import (
 // WriteGuard provides safety checks for register writes.
 // It enforces rate limiting and logs all write operations.
 type WriteGuard struct {
-	mu                sync.Mutex
-	writes            []time.Time
-	maxWritesPerMin   int
-	writeLog          []WriteLogEntry
-	maxLogEntries     int
+	mu              sync.Mutex
+	writes          []time.Time
+	maxWritesPerMin int
+	writeLog        []WriteLogEntry
+	maxLogEntries   int
 }
 
 // WriteLogEntry records a single write operation.

@@ -157,13 +157,13 @@ func buildResponsePacket(regType byte, startReg uint16, values []uint16) []byte 
 	total := 35 + valueLen + 2
 	pkt := make([]byte, total)
 	pkt[0], pkt[1] = 0xa1, 0x1a
-	binary.LittleEndian.PutUint16(pkt[2:4], 5)                    // Protocol=5
-	binary.LittleEndian.PutUint16(pkt[4:6], uint16(total-6))      // Frame length
-	pkt[6] = 0x01                                                  // Unknown
+	binary.LittleEndian.PutUint16(pkt[2:4], 5)               // Protocol=5
+	binary.LittleEndian.PutUint16(pkt[4:6], uint16(total-6)) // Frame length
+	pkt[6] = 0x01                                            // Unknown
 	pkt[7] = FuncTranslatedData
 	copy(pkt[8:18], "AAAAAAAAAA")
-	binary.LittleEndian.PutUint16(pkt[18:20], uint16(total-20))   // Data length
-	pkt[20] = 0x01                                                 // Address=inverter
+	binary.LittleEndian.PutUint16(pkt[18:20], uint16(total-20)) // Data length
+	pkt[20] = 0x01                                              // Address=inverter
 	pkt[21] = regType
 	copy(pkt[22:32], "1234567890")
 	binary.LittleEndian.PutUint16(pkt[32:34], startReg)

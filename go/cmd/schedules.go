@@ -14,21 +14,21 @@ const slots = 48 // 30-min resolution across 24 hours
 
 // ANSI color codes
 const (
-	colorReset   = "\033[0m"
-	colorYellow  = "\033[33m" // AC Charge
-	colorRed     = "\033[31m" // Charge Priority (orange-ish)
-	colorGreen   = "\033[32m" // Forced Discharge
-	colorCyan    = "\033[36m" // Self Consumption
-	colorDim     = "\033[2m"
-	colorBold    = "\033[1m"
+	colorReset  = "\033[0m"
+	colorYellow = "\033[33m" // AC Charge
+	colorRed    = "\033[31m" // Charge Priority (orange-ish)
+	colorGreen  = "\033[32m" // Forced Discharge
+	colorCyan   = "\033[36m" // Self Consumption
+	colorDim    = "\033[2m"
+	colorBold   = "\033[1m"
 )
 
 type modeInfo struct {
-	key      string // scheduleTypes key
-	label    string // display label (13 chars padded)
-	letter   byte   // A, C, F
-	color    string
-	enableBit int   // bit in register 21
+	key       string // scheduleTypes key
+	label     string // display label (13 chars padded)
+	letter    byte   // A, C, F
+	color     string
+	enableBit int // bit in register 21
 }
 
 var modes = []modeInfo{
@@ -40,7 +40,7 @@ var modes = []modeInfo{
 type modeData struct {
 	info        modeInfo
 	enabled     bool
-	slots       [slots]bool    // composite of all periods
+	slots       [slots]bool // composite of all periods
 	periods     [3][slots]bool
 	periodTimes [3][2][2]int // [period][start/end][hour/min]
 	power       uint16

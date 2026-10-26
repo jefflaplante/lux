@@ -16,8 +16,8 @@ import (
 // scheduleType defines the register layout for a schedule group.
 type scheduleType struct {
 	name     string
-	powerReg uint16 // power % register
-	socReg   uint16 // SOC limit register
+	powerReg uint16       // power % register
+	socReg   uint16       // SOC limit register
 	periods  [3][2]uint16 // 3 time windows, each [start, end] register
 }
 

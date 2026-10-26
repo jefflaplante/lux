@@ -12,16 +12,16 @@ import (
 
 // Registers needed for status display
 var statusInputRegs = []uint16{
-	0,                // Status
-	1, 2, 3,          // PV voltages
-	4,                // Battery voltage
-	5,                // SOC/SOH
-	7, 8, 9,          // PV power
-	10, 11,           // Battery charge/discharge power
-	16,               // Inverter power
-	26, 27,           // Grid to/from
-	28, 29, 30,       // PV energy today
-	64, 65, 66,       // Temperatures
+	0,       // Status
+	1, 2, 3, // PV voltages
+	4,       // Battery voltage
+	5,       // SOC/SOH
+	7, 8, 9, // PV power
+	10, 11, // Battery charge/discharge power
+	16,     // Inverter power
+	26, 27, // Grid to/from
+	28, 29, 30, // PV energy today
+	64, 65, 66, // Temperatures
 }
 
 var statusHoldingRegs = []uint16{
@@ -132,7 +132,10 @@ func printStatusText(client *lux.Client) {
 
 	// PV
 	fmt.Println("PV")
-	for _, pv := range []struct{ name string; vReg, pReg, eReg uint16 }{
+	for _, pv := range []struct {
+		name             string
+		vReg, pReg, eReg uint16
+	}{
 		{"PV1", 1, 7, 28},
 		{"PV2", 2, 8, 29},
 		{"PV3", 3, 9, 30},

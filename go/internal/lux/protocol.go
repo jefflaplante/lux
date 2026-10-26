@@ -15,10 +15,10 @@ const (
 
 // Modbus function codes
 const (
-	ModbusReadHolding  = 0x03
-	ModbusReadInput    = 0x04
-	ModbusWriteSingle  = 0x06
-	ModbusWriteMulti   = 0x10
+	ModbusReadHolding = 0x03
+	ModbusReadInput   = 0x04
+	ModbusWriteSingle = 0x06
+	ModbusWriteMulti  = 0x10
 )
 
 // Packet represents a decoded LuxPower TCP frame.

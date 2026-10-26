@@ -67,11 +67,11 @@ func TestParseTimeRangeDisabled(t *testing.T) {
 
 func TestParseTimeRangeInvalid(t *testing.T) {
 	cases := []string{
-		"22:00",        // no dash
-		"25:00-06:00",  // invalid hour
-		"22:60-06:00",  // invalid minute
-		"22:00-06:99",  // invalid end minute
-		"abc-def",      // not numbers
+		"22:00",       // no dash
+		"25:00-06:00", // invalid hour
+		"22:60-06:00", // invalid minute
+		"22:00-06:99", // invalid end minute
+		"abc-def",     // not numbers
 	}
 	for _, c := range cases {
 		if _, _, err := parseTimeRange(c); err == nil {
