@@ -405,3 +405,35 @@ func TestSignedTemperatures(t *testing.T) {
 		t.Errorf("ValidateValue(-1C) = %q, want no warning", w)
 	}
 }
+
+func TestRegisterDefsReconciledWithDocs(t *testing.T) {
+	tests := []struct {
+		name    string
+		regType string
+		reg     uint16
+		raw     uint16
+		want    string
+	}{
+		{"h158 shutdown voltage ÷10", "holding", 158, 400, "40.00 V"},
+		{"h159 charge stop voltage ÷10", "holding", 159, 590, "59.00 V"},
+		{"i67 battery temp °F×10", "input", 67, 885, "88.50 °F"},
+		{"i67 battery temp below zero", "input", 67, 0xFFCE, "-5.00 °F"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			def, ok := GetRegisterDef(tt.regType, tt.reg)
+			if !ok {
+				t.Fatalf("%s %d not defined", tt.regType, tt.reg)
+			}
+			if got := def.FormatValue(tt.raw); got != tt.want {
+				t.Errorf("FormatValue(%d) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+	if w := ValidateValue("input", 67, 885); w != "" {
+		t.Errorf("ValidateValue(i67=88.5°F) = %q, want no warning", w)
+	}
+	if w := ValidateValue("input", 67, 3000); w == "" {
+		t.Error("ValidateValue(i67=300°F) should warn")
+	}
+}

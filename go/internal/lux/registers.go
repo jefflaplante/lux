@@ -364,7 +364,7 @@ var InputRegisters = map[uint16]RegisterDef{
 	64: {"Internal Temp", "Inverter internal temperature", 0, "°C", "", nil, nil, -10, 70, true},
 	65: {"Radiator 1 Temp", "Heat sink 1 temperature", 0, "°C", "", nil, nil, -10, 85, true},
 	66: {"Radiator 2 Temp", "Heat sink 2 temperature", 0, "°C", "", nil, nil, -10, 85, true},
-	67: {"Battery Temp Raw", "Battery temperature (raw, encoding varies)", 0, "°C", "", nil, nil, 0, 0, false},
+	67: {"Battery Temp", "Battery temperature (°F×10; raw 885 = 88.5 °F)", 10, "°F", "", nil, nil, 0, 0, false},
 	68: {"Battery Temp Scaled", "Battery temperature (÷10 scaling)", 10, "°C", "", nil, nil, -10, 50, true},
 
 	// Runtime
@@ -511,6 +511,8 @@ var HoldingRegisters = map[uint16]RegisterDef{
 	144: {"Floating Voltage", "Battery float charge voltage", 10, "V", "", nil, nil, 0, 0, false},
 	147: {"Battery Capacity", "Configured battery capacity", 0, "Ah", "", nil, nil, 0, 0, false},
 	148: {"Nominal Battery Voltage", "Nominal battery voltage", 10, "V", "", nil, nil, 0, 0, false},
+	158: {"Battery Shutdown Voltage", "Battery shutdown / stop-discharge voltage (SA shutdown_battery_voltage)", 10, "V", "", nil, nil, 0, 0, false},
+	159: {"Grid Charge Stop Voltage", "Stop grid charging at this battery voltage (SA grid_charge_stop_voltage)", 10, "V", "", nil, nil, 0, 0, false},
 	160: {"AC Charge Start SOC", "Begin AC charging below this SOC", 0, "%", "", nil, nil, 0, 100, true},
 	161: {"AC Charge End SOC", "Stop AC charging at this SOC", 0, "%", "", nil, nil, 0, 100, true},
 	162: {"Battery Warning Voltage", "Low battery warning voltage", 10, "V", "", nil, nil, 0, 0, false},
@@ -596,6 +598,10 @@ func ValidateValue(regType string, num uint16, raw uint16) string {
 	case "°C":
 		if scaled > 100 || scaled < -50 {
 			return fmt.Sprintf("suspicious temp: %.1f°C", scaled)
+		}
+	case "°F":
+		if scaled > 212 || scaled < -58 {
+			return fmt.Sprintf("suspicious temp: %.1f°F", scaled)
 		}
 	case "Hz":
 		if scaled > 70 || scaled < 40 {
