@@ -39,7 +39,9 @@ func NewStaleDetector(threshold int) *StaleDetector {
 
 // Observe records pkt and reports whether it is stale (a frozen repeat).
 func (d *StaleDetector) Observe(pkt *Packet) bool {
-	if d.threshold < 2 || pkt.RegisterType != "input" {
+	// Frames without register data (e.g. request echoes) neither count as
+	// stale nor reset a block's run.
+	if d.threshold < 2 || pkt.RegisterType != "input" || len(pkt.Registers) == 0 {
 		return false
 	}
 	h := hashRegisters(pkt)

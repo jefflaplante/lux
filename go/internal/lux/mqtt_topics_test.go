@@ -163,6 +163,9 @@ func TestStaleDetector(t *testing.T) {
 			[]*Packet{in(0, 5), in(40, 5), in(0, 5), in(40, 6)}, []bool{false, false, true, false}},
 		{"holding config blocks exempt", 2,
 			[]*Packet{hold(1), hold(1), hold(1)}, []bool{false, false, false}},
+		{"data-less frames don't reset the run", 3,
+			[]*Packet{in(0, 5), {RegisterType: "input"}, in(0, 5), {RegisterType: "input"}, in(0, 5)},
+			[]bool{false, false, false, false, true}},
 		{"threshold below 2 disables", 1,
 			[]*Packet{in(0, 5), in(0, 5), in(0, 5)}, []bool{false, false, false}},
 	}
