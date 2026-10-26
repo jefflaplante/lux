@@ -185,10 +185,10 @@ func TestListenWithPipe(t *testing.T) {
 	// Build a holding response packet with 2 registers
 	pkt := buildResponsePacket(ModbusReadHolding, 21, []uint16{0xABCD, 0x1111})
 
-	var listenErr error
+	listenDone := make(chan error, 1)
 	received := make(chan struct{})
 	go func() {
-		listenErr = c.Listen(func(p *Packet) {
+		listenDone <- c.Listen(func(p *Packet) {
 			close(received)
 		})
 	}()
@@ -215,7 +215,7 @@ func TestListenWithPipe(t *testing.T) {
 	// Close to stop Listen
 	server.Close()
 	client.Close()
-	_ = listenErr
+	<-listenDone
 }
 
 func TestListenInputRegisters(t *testing.T) {
