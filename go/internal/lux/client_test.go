@@ -495,3 +495,56 @@ func TestReadHoldingRangePartial(t *testing.T) {
 		t.Errorf("err = %v, want it to report 2 of 4 received", err)
 	}
 }
+
+func TestListenDropsBadCRC(t *testing.T) {
+	c := NewClient("1.2.3.4", 8000, "AAAAAAAAAA", "1234567890")
+	server, client := net.Pipe()
+	defer server.Close()
+	c.conn = client
+
+	bad := buildResponsePacket(ModbusReadInput, 26, []uint16{2520})
+	bad[len(bad)-1] ^= 0xFF // corrupt CRC
+	good := buildResponsePacket(ModbusReadInput, 27, []uint16{410})
+
+	var seen []uint16
+	got := make(chan struct{})
+	go c.Listen(func(p *Packet) {
+		seen = append(seen, p.StartRegister)
+		close(got)
+	})
+	server.Write(bad)
+	server.Write(good)
+
+	select {
+	case <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("good packet never delivered")
+	}
+	if len(seen) != 1 || seen[0] != 27 {
+		t.Errorf("callback saw frames starting at %v, want only [27]", seen)
+	}
+	if _, ok := c.GetInput(26); ok {
+		t.Error("bad-CRC frame was stored")
+	}
+	if n := c.DroppedBadCRC(); n != 1 {
+		t.Errorf("DroppedBadCRC = %d, want 1", n)
+	}
+}
+
+func TestReadHoldingRangeDropsBadCRC(t *testing.T) {
+	c := NewClient("1.2.3.4", 8000, "AAAAAAAAAA", "1234567890")
+	server, client := net.Pipe()
+	defer server.Close()
+	c.conn = client
+
+	go func() {
+		buf := make([]byte, 1024)
+		server.Read(buf)
+		bad := buildResponsePacket(ModbusReadHolding, 21, []uint16{0})
+		bad[len(bad)-1] ^= 0xFF
+		server.Write(bad)
+	}()
+	if got, err := c.ReadHoldingRange(21, 1, 200*time.Millisecond); err == nil {
+		t.Fatalf("ReadHoldingRange accepted a bad-CRC frame: %v", got)
+	}
+}

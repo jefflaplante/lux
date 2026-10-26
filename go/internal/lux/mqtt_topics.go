@@ -17,8 +17,8 @@ func fmtDiv10(raw uint16) string  { return fmt.Sprintf("%.1f", float64(raw)/10) 
 func fmtDiv100(raw uint16) string { return fmt.Sprintf("%.1f", float64(raw)/100) }
 func fmtRaw(raw uint16) string    { return fmt.Sprintf("%d", raw) }
 
-// fmtCtoF converts an integer °C reading to °F (Solar Assistant reports °F).
-func fmtCtoF(raw uint16) string { return fmt.Sprintf("%.1f", float64(raw)*1.8+32) }
+// fmtCtoF converts a signed integer °C reading to °F (Solar Assistant reports °F).
+func fmtCtoF(raw uint16) string { return fmt.Sprintf("%.1f", float64(int16(raw))*1.8+32) }
 func fmtTime(raw uint16) string {
 	hour := raw & 0xFF
 	min := raw >> 8
@@ -43,10 +43,7 @@ var InputMQTTTopics = map[uint16][]MQTTMapping{
 	8:  {{"inverter_1/pv_power_2", fmtRaw}},
 	9:  {{"inverter_1/pv_power_3", fmtRaw}},
 	12: {{"inverter_1/grid_voltage", fmtDiv10}},
-	15: {
-		{"inverter_1/grid_frequency", fmtDiv100},
-		{"inverter_1/ac_output_frequency", fmtDiv100},
-	},
+	15: {{"inverter_1/grid_frequency", fmtDiv100}},   // ac_output_frequency: see ComputedTopics
 	20: {{"inverter_1/ac_output_voltage", fmtDiv10}}, // EPS Voltage R
 	65: {{"inverter_1/temperature", fmtCtoF}},        // Radiator 1 Temp, °C → °F
 	// Register 106 removed: inverter-estimated battery current is unreliable
@@ -142,6 +139,11 @@ func ComputedTopics(regs map[uint16]uint16) map[string]string {
 		if expOk && impOk {
 			lp += int(imp) - int(exp)
 		}
+		// House load can't be negative. A frozen dongle frame once produced
+		// i16=1, i26=2520 → -2519 W; clamp rather than publish nonsense.
+		if lp < 0 {
+			lp = 0
+		}
 		result["inverter_1/load_power"] = fmt.Sprintf("%d", lp)
 	}
 
@@ -160,8 +162,32 @@ func ComputedTopics(regs map[uint16]uint16) map[string]string {
 	// Battery temperature from register 67 (°F×10). SA's total/battery_temperature
 	// (constant 242.6) is corrupt on this install; we intentionally report the sensor.
 	if v, ok := regs[67]; ok {
-		result["total/battery_temperature"] = fmt.Sprintf("%.1f", float64(v)/10)
+		result["total/battery_temperature"] = fmt.Sprintf("%.1f", float64(int16(v))/10)
+	}
+
+	// AC output frequency. i15 is the *grid* frequency and is wrong during an
+	// outage, when the inverter is the one making the output. i23 (EPS/output
+	// frequency) tracks i15 exactly while grid-tied (r=1.000, CORRELATION.md)
+	// and keeps reporting the real output when islanded, so prefer it. Fall
+	// back to i15 only when i23 is implausible (e.g. 0 with EPS disabled).
+	f23, ok23 := regs[23]
+	f15, ok15 := regs[15]
+	switch {
+	case ok23 && plausibleFreq(f23):
+		result["inverter_1/ac_output_frequency"] = fmtDiv100(f23)
+	case ok15 && plausibleFreq(f15):
+		result["inverter_1/ac_output_frequency"] = fmtDiv100(f15)
+	case ok23:
+		result["inverter_1/ac_output_frequency"] = fmtDiv100(f23)
+	case ok15:
+		result["inverter_1/ac_output_frequency"] = fmtDiv100(f15)
 	}
 
 	return result
+}
+
+// plausibleFreq reports whether a ÷100 Hz raw value is a real AC frequency
+// (45-65 Hz covers 50 Hz and 60 Hz grids with wide tolerance).
+func plausibleFreq(raw uint16) bool {
+	return raw >= 4500 && raw <= 6500
 }

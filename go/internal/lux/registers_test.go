@@ -349,10 +349,16 @@ func TestValidateValue(t *testing.T) {
 		t.Error("ValidateValue(percent=300) should warn")
 	}
 
+	// Temperatures are signed: 65500 is -36°C (plausible), not 65500°C
+	got = ValidateValue("input", 64, 65500)
+	if got != "" {
+		t.Errorf("ValidateValue(temp=-36C) = %q, want empty", got)
+	}
+
 	// Temperature below -50
-	got = ValidateValue("input", 64, 65500) // wraps to large number, but as °C it's > 100
+	got = ValidateValue("input", 64, 0xFFC4) // -60°C
 	if got == "" {
-		t.Error("ValidateValue(temp>100) should warn")
+		t.Error("ValidateValue(temp=-60C) should warn")
 	}
 }
 
@@ -371,5 +377,31 @@ func TestLegacyNameMaps(t *testing.T) {
 	}
 	if InputRegisterNames[0] != "Status" {
 		t.Errorf("InputRegisterNames[0] = %q", InputRegisterNames[0])
+	}
+}
+
+func TestSignedTemperatures(t *testing.T) {
+	tests := []struct {
+		name string
+		reg  uint16
+		raw  uint16
+		want string
+	}{
+		{"radiator 42C", 65, 42, "42 °C"},
+		{"radiator -1C", 65, 0xFFFF, "-1 °C"},
+		{"internal -10C", 64, 0xFFF6, "-10 °C"},
+		{"battery scaled -10.0C", 68, 0xFF9C, "-10.00 °C"},
+		{"max cell temp -2.5C", 111, 0xFFE7, "-2.50 °C"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			def := InputRegisters[tt.reg]
+			if got := def.FormatValue(tt.raw); got != tt.want {
+				t.Errorf("FormatValue(%#04x) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+	if w := ValidateValue("input", 65, 0xFFFF); w != "" {
+		t.Errorf("ValidateValue(-1C) = %q, want no warning", w)
 	}
 }

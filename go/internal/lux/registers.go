@@ -99,14 +99,28 @@ func (r RegisterDef) FormatValue(raw uint16) string {
 		return r.formatStatus(raw)
 	}
 	if r.Divisor > 0 {
-		scaled := float64(raw) / r.Divisor
+		scaled := r.ScaledValue(raw)
 		if r.Unit != "" {
 			return fmt.Sprintf("%.2f %s", scaled, r.Unit)
 		}
 		return fmt.Sprintf("%.2f", scaled)
 	}
 	if r.Unit != "" {
-		return fmt.Sprintf("%d %s", raw, r.Unit)
+		return fmt.Sprintf("%s %s", r.formatInt(raw), r.Unit)
+	}
+	return r.formatInt(raw)
+}
+
+// signed reports whether raw values are two's-complement int16. Temperatures
+// go below zero; reading them unsigned turns -1 into 65535.
+func (r RegisterDef) signed() bool {
+	return r.Unit == "°C" || r.Unit == "°F"
+}
+
+// formatInt formats an unscaled raw value, honoring sign.
+func (r RegisterDef) formatInt(raw uint16) string {
+	if r.signed() {
+		return fmt.Sprintf("%d", int16(raw))
 	}
 	return fmt.Sprintf("%d", raw)
 }
@@ -142,10 +156,14 @@ func (r RegisterDef) formatStatus(raw uint16) string {
 
 // ScaledValue returns the numeric scaled value.
 func (r RegisterDef) ScaledValue(raw uint16) float64 {
-	if r.Divisor > 0 {
-		return float64(raw) / r.Divisor
+	v := float64(raw)
+	if r.signed() {
+		v = float64(int16(raw))
 	}
-	return float64(raw)
+	if r.Divisor > 0 {
+		return v / r.Divisor
+	}
+	return v
 }
 
 // FormatValueOnly returns the scaled value as a string without the unit.
@@ -191,9 +209,9 @@ func (r RegisterDef) FormatValueOnly(raw uint16) string {
 		return r.formatStatus(raw)
 	}
 	if r.Divisor > 0 {
-		return fmt.Sprintf("%.2f", float64(raw)/r.Divisor)
+		return fmt.Sprintf("%.2f", r.ScaledValue(raw))
 	}
-	return fmt.Sprintf("%d", raw)
+	return r.formatInt(raw)
 }
 
 // StatusCodes maps inverter status register values to descriptions.

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,6 +23,9 @@ type Client struct {
 
 	// Unconsumed bytes from ReadHoldingRange (may hold a partial frame)
 	rbuf []byte
+
+	// Register data frames dropped for failing CRC
+	badCRC atomic.Uint64
 
 	// Latest register snapshots
 	holdingMu sync.RWMutex
@@ -86,12 +90,30 @@ func (c *Client) Listen(callback func(*Packet)) error {
 		}
 
 		for _, pkt := range packets {
+			if !c.accept(pkt) {
+				continue
+			}
 			c.updateRegisters(pkt)
 			if callback != nil {
 				callback(pkt)
 			}
 		}
 	}
+}
+
+// accept reports whether a decoded packet may update state. Register data
+// frames that fail CRC are dropped (never stored or delivered) and counted.
+func (c *Client) accept(pkt *Packet) bool {
+	if (pkt.RegisterType == "holding" || pkt.RegisterType == "input") && !pkt.CRCValid {
+		c.badCRC.Add(1)
+		return false
+	}
+	return true
+}
+
+// DroppedBadCRC returns how many register frames were dropped for a bad CRC.
+func (c *Client) DroppedBadCRC() uint64 {
+	return c.badCRC.Load()
 }
 
 func (c *Client) updateRegisters(pkt *Packet) {
@@ -217,7 +239,9 @@ func (c *Client) ReadHoldingRange(start, count uint16, timeout time.Duration) (m
 		packets, consumed := FindPackets(c.rbuf)
 		c.rbuf = c.rbuf[consumed:]
 		for _, pkt := range packets {
-			c.updateRegisters(pkt)
+			if c.accept(pkt) {
+				c.updateRegisters(pkt)
+			}
 		}
 		if got, ok := collect(); ok {
 			return got, nil

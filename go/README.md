@@ -81,6 +81,7 @@ lux publish --log-json
 | `--retain` | true | `LUX_RETAIN` | Use MQTT retain flag |
 | `--quiet` | false | `LUX_QUIET` | Suppress per-packet logging |
 | `--log-json` | false | `LUX_LOG_JSON` | Output logs as JSON lines |
+| `--stale-threshold` | 3 | `LUX_STALE_THRESHOLD` | Consecutive identical input frames treated as a frozen dongle cache (<2 disables) |
 
 ### Topic Structure
 
@@ -101,7 +102,14 @@ Two topics are maintained for health monitoring:
 | Topic | Description |
 |-------|-------------|
 | `{prefix}/inverter_1/online/state` | `"true"` when connected, `"false"` on disconnect (MQTT LWT) |
-| `{prefix}/inverter_1/last_seen/state` | RFC3339 timestamp of last successful publish |
+| `{prefix}/inverter_1/last_seen/state` | RFC3339 timestamp of the last fresh live-data (input register) publish |
+
+### Data Integrity
+
+- Frames that fail CRC are dropped (never stored or published); the running count is logged at most once a minute.
+- The WAN dongle sometimes serves an identical cached input frame for long stretches. An input block repeated identically `--stale-threshold` times in a row is skipped and does **not** refresh `last_seen` — alert on `last_seen` age to catch a stuck dongle.
+- `load_power` is clamped at ≥ 0 (a frozen frame once produced −2519 W).
+- `ac_output_frequency` comes from input 23 (output/EPS frequency, identical to grid frequency while grid-tied), falling back to input 15 only when input 23 is implausible — so it stays correct during a grid outage.
 
 ### Automatic Reconnection
 
@@ -169,6 +177,7 @@ All flags can be set via environment variables with the `LUX_` prefix. Environme
 | `LUX_RETAIN` | `--retain` | true | Use MQTT retain flag |
 | `LUX_QUIET` | `--quiet` | false | Suppress per-packet logging |
 | `LUX_LOG_JSON` | `--log-json` | false | Output logs as JSON lines |
+| `LUX_STALE_THRESHOLD` | `--stale-threshold` | 3 | Frozen-frame detection threshold |
 
 **Example:**
 

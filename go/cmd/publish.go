@@ -53,6 +53,19 @@ func (l *pubLogger) status(msg string) {
 	}
 }
 
+func (l *pubLogger) warn(msg string, fields map[string]any) {
+	// Data-integrity warnings always print regardless of quiet
+	if l.json {
+		out := map[string]any{"ts": time.Now().UTC().Format(time.RFC3339), "level": "warn", "msg": msg}
+		for k, v := range fields {
+			out[k] = v
+		}
+		json.NewEncoder(l.w).Encode(out)
+	} else {
+		fmt.Fprintf(l.w, "[%s] warning: %s %v\n", time.Now().Format("15:04:05"), msg, fields)
+	}
+}
+
 func (l *pubLogger) errorf(msg string, err error) {
 	// Errors always print regardless of quiet
 	if l.json {
@@ -76,7 +89,12 @@ human-readable formatted values matching Solar Assistant output.
 
 Health check topics:
   {prefix}/inverter_1/online/state    - "true" when connected, "false" on disconnect (LWT)
-  {prefix}/inverter_1/last_seen/state - RFC3339 timestamp of last successful publish
+  {prefix}/inverter_1/last_seen/state - RFC3339 timestamp of the last fresh live-data
+                                        (input register) publish; alert on its age
+
+Data integrity: frames failing CRC are dropped, and an input block repeated
+identically --stale-threshold times in a row is treated as a frozen dongle
+cache — not published and not counted toward last_seen.
 
 All flags can be set via environment variables with LUX_ prefix.`,
 	RunE: runPublish,
@@ -90,6 +108,8 @@ func init() {
 	publishCmd.Flags().Bool("retain", true, "use MQTT retain flag (env: LUX_RETAIN)")
 	publishCmd.Flags().Bool("quiet", false, "suppress per-packet logging (env: LUX_QUIET)")
 	publishCmd.Flags().Bool("log-json", false, "output logs as JSON lines (env: LUX_LOG_JSON)")
+	publishCmd.Flags().Int("stale-threshold", lux.DefaultStaleThreshold,
+		"consecutive identical input frames treated as a frozen dongle cache; <2 disables (env: LUX_STALE_THRESHOLD)")
 
 	// Bind to viper for env var support
 	viper.BindPFlag("broker", publishCmd.Flags().Lookup("broker"))
@@ -99,6 +119,7 @@ func init() {
 	viper.BindPFlag("retain", publishCmd.Flags().Lookup("retain"))
 	viper.BindPFlag("quiet", publishCmd.Flags().Lookup("quiet"))
 	viper.BindPFlag("log_json", publishCmd.Flags().Lookup("log-json"))
+	viper.BindPFlag("stale_threshold", publishCmd.Flags().Lookup("stale-threshold"))
 
 	rootCmd.AddCommand(publishCmd)
 }
@@ -114,12 +135,12 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	retain := viper.GetBool("retain")
 	quiet := viper.GetBool("quiet")
 	logJSON := viper.GetBool("log_json")
+	staleThreshold := viper.GetInt("stale_threshold")
 
 	log := &pubLogger{json: logJSON, quiet: quiet, w: os.Stderr}
 
 	// Connect to MQTT broker (stays connected across inverter reconnects)
 	onlineTopic := prefix + "/inverter_1/online/state"
-	lastSeenTopic := prefix + "/inverter_1/last_seen/state"
 
 	opts := mqtt.NewClientOptions().
 		AddBroker(broker).
@@ -177,7 +198,13 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 	}()
 
-	var totalPublished int
+	pub := &publisher{
+		mqtt:   mqttClient,
+		prefix: prefix,
+		retain: retain,
+		log:    log,
+		stale:  lux.NewStaleDetector(staleThreshold),
+	}
 
 	// Reconnect loop with exponential backoff
 	backoff := 1 * time.Second
@@ -187,7 +214,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		// Check shutdown before connecting
 		select {
 		case <-shutdownCh:
-			log.status(fmt.Sprintf("Done. %d total publishes.", totalPublished))
+			log.status(fmt.Sprintf("Done. %d total publishes.", pub.totalPublished))
 			return nil
 		default:
 		}
@@ -200,7 +227,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 
 			select {
 			case <-shutdownCh:
-				log.status(fmt.Sprintf("Done. %d total publishes.", totalPublished))
+				log.status(fmt.Sprintf("Done. %d total publishes.", pub.totalPublished))
 				return nil
 			case <-time.After(backoff):
 			}
@@ -219,85 +246,12 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		mqttClient.Publish(onlineTopic, 1, true, "true")
 
 		listenErr := client.Listen(func(pkt *lux.Packet) {
+			pub.noteBadCRC(client.DroppedBadCRC())
 			if pkt.TCPFunction == lux.FuncHeartbeat {
 				mqttClient.Publish(onlineTopic, 1, true, "true")
 				return
 			}
-			if pkt.RegisterType == "" {
-				return
-			}
-
-			// Choose the topic mapping based on register type
-			var topicMap map[uint16][]lux.MQTTMapping
-			switch pkt.RegisterType {
-			case "input":
-				topicMap = lux.InputMQTTTopics
-			case "holding":
-				topicMap = lux.HoldingMQTTTopics
-			}
-
-			packetPublished := 0
-
-			// Publish individual register topics
-			for reg := pkt.StartRegister; reg < pkt.StartRegister+pkt.RegisterCount; reg++ {
-				raw, ok := pkt.Registers[reg]
-				if !ok {
-					continue
-				}
-
-				mappings, hasMappings := topicMap[reg]
-				if !hasMappings {
-					continue
-				}
-
-				for _, m := range mappings {
-					var val string
-					if m.Format != nil {
-						val = m.Format(raw)
-					} else {
-						val = fmt.Sprintf("%d", raw)
-					}
-					topic := prefix + "/" + m.Topic + "/state"
-					mqttClient.Publish(topic, 0, retain, val)
-					packetPublished++
-				}
-			}
-
-			// Publish bitmask flags from register 21
-			if pkt.RegisterType == "holding" {
-				if raw, ok := pkt.Registers[21]; ok {
-					for bit, topic := range lux.MasterFlagTopics {
-						val := "false"
-						if raw&(1<<bit) != 0 {
-							val = "true"
-						}
-						mqttClient.Publish(prefix+"/"+topic+"/state", 0, retain, val)
-						packetPublished++
-					}
-				}
-			}
-
-			// Publish computed topics for input registers
-			if pkt.RegisterType == "input" {
-				computed := lux.ComputedTopics(pkt.Registers)
-				for topic, val := range computed {
-					mqttClient.Publish(prefix+"/"+topic+"/state", 0, retain, val)
-					packetPublished++
-				}
-			}
-
-			totalPublished += packetPublished
-
-			// Publish last_seen timestamp for health monitoring
-			mqttClient.Publish(lastSeenTopic, 0, true, time.Now().UTC().Format(time.RFC3339))
-
-			log.info("published", map[string]any{
-				"type":  pkt.RegisterType,
-				"start": pkt.StartRegister,
-				"end":   pkt.StartRegister + pkt.RegisterCount - 1,
-				"count": packetPublished,
-				"total": totalPublished,
-			})
+			pub.handlePacket(pkt)
 		})
 
 		// Clear active client before closing to prevent double-close
@@ -309,7 +263,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		// Check if this was a shutdown
 		select {
 		case <-shutdownCh:
-			log.status(fmt.Sprintf("Done. %d total publishes.", totalPublished))
+			log.status(fmt.Sprintf("Done. %d total publishes.", pub.totalPublished))
 			return nil
 		default:
 		}
@@ -320,4 +274,137 @@ func runPublish(cmd *cobra.Command, args []string) error {
 			log.status("Reconnecting...")
 		}
 	}
+}
+
+// dropLogInterval rate-limits repeated data-integrity warnings.
+const dropLogInterval = time.Minute
+
+// mqttPublisher is the subset of mqtt.Client the publisher uses.
+type mqttPublisher interface {
+	Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token
+}
+
+// publisher turns decoded inverter packets into MQTT messages.
+type publisher struct {
+	mqtt   mqttPublisher
+	prefix string
+	retain bool
+	log    *pubLogger
+	stale  *lux.StaleDetector
+	now    func() time.Time // nil = time.Now
+
+	totalPublished int
+	staleSkipped   uint64
+	lastStaleLog   time.Time
+	badCRC         uint64
+	lastCRCLog     time.Time
+}
+
+func (p *publisher) clock() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
+}
+
+// occasionally reports whether a rate-limited log line may be written now.
+func (p *publisher) occasionally(last *time.Time) bool {
+	now := p.clock()
+	if last.IsZero() || now.Sub(*last) >= dropLogInterval {
+		*last = now
+		return true
+	}
+	return false
+}
+
+// noteBadCRC records the client's running bad-CRC drop count and logs when it
+// has grown, at most once per dropLogInterval.
+func (p *publisher) noteBadCRC(total uint64) {
+	if total <= p.badCRC {
+		return
+	}
+	if p.occasionally(&p.lastCRCLog) {
+		p.log.warn("dropped frames with bad CRC", map[string]any{"total": total, "new": total - p.badCRC})
+		p.badCRC = total
+	}
+}
+
+// handlePacket publishes one register packet. Frozen (stale) input frames are
+// skipped entirely and do not refresh last_seen, so its age reveals a stuck
+// dongle. last_seen tracks live input data only; config frames don't touch it.
+func (p *publisher) handlePacket(pkt *lux.Packet) {
+	var topicMap map[uint16][]lux.MQTTMapping
+	switch pkt.RegisterType {
+	case "input":
+		topicMap = lux.InputMQTTTopics
+	case "holding":
+		topicMap = lux.HoldingMQTTTopics
+	default:
+		return
+	}
+
+	if p.stale.Observe(pkt) {
+		p.staleSkipped++
+		if p.occasionally(&p.lastStaleLog) {
+			p.log.warn("skipping frozen frame (identical repeat)", map[string]any{
+				"start": pkt.StartRegister, "count": pkt.RegisterCount, "skipped_total": p.staleSkipped,
+			})
+		}
+		return
+	}
+
+	packetPublished := 0
+	send := func(topic, val string) {
+		p.mqtt.Publish(p.prefix+"/"+topic+"/state", 0, p.retain, val)
+		packetPublished++
+	}
+
+	// Individual register topics
+	for reg := pkt.StartRegister; reg < pkt.StartRegister+pkt.RegisterCount; reg++ {
+		raw, ok := pkt.Registers[reg]
+		if !ok {
+			continue
+		}
+		for _, m := range topicMap[reg] {
+			val := fmt.Sprintf("%d", raw)
+			if m.Format != nil {
+				val = m.Format(raw)
+			}
+			send(m.Topic, val)
+		}
+	}
+
+	// Bitmask flags from register 21
+	if pkt.RegisterType == "holding" {
+		if raw, ok := pkt.Registers[21]; ok {
+			for bit, topic := range lux.MasterFlagTopics {
+				val := "false"
+				if raw&(1<<bit) != 0 {
+					val = "true"
+				}
+				send(topic, val)
+			}
+		}
+	}
+
+	// Computed topics for input registers
+	if pkt.RegisterType == "input" {
+		for topic, val := range lux.ComputedTopics(pkt.Registers) {
+			send(topic, val)
+		}
+	}
+
+	p.totalPublished += packetPublished
+
+	if pkt.RegisterType == "input" && packetPublished > 0 {
+		p.mqtt.Publish(p.prefix+"/inverter_1/last_seen/state", 0, true, p.clock().UTC().Format(time.RFC3339))
+	}
+
+	p.log.info("published", map[string]any{
+		"type":  pkt.RegisterType,
+		"start": pkt.StartRegister,
+		"end":   pkt.StartRegister + pkt.RegisterCount - 1,
+		"count": packetPublished,
+		"total": p.totalPublished,
+	})
 }
