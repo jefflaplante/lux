@@ -27,6 +27,7 @@ modes, SOC limits — without depending on SolarAssistant or the cloud.`,
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 }

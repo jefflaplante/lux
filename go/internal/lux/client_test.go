@@ -3,6 +3,7 @@ package lux
 import (
 	"encoding/binary"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -342,7 +343,7 @@ func TestWriteSingleWithPipe(t *testing.T) {
 	// Pre-populate holding so we can verify old value logging
 	c.updateRegisters(&Packet{
 		RegisterType: "holding",
-		Registers:    map[uint16]uint16{60: 50},
+		Registers:    map[uint16]uint16{64: 50},
 	})
 
 	received := make(chan []byte, 1)
@@ -352,7 +353,7 @@ func TestWriteSingleWithPipe(t *testing.T) {
 		received <- buf[:n]
 	}()
 
-	err := c.WriteSingle(60, 100)
+	err := c.WriteSingle(64, 100)
 	if err != nil {
 		t.Fatalf("WriteSingle: %v", err)
 	}
@@ -363,8 +364,8 @@ func TestWriteSingleWithPipe(t *testing.T) {
 	}
 	reg := binary.LittleEndian.Uint16(data[32:34])
 	val := binary.LittleEndian.Uint16(data[34:36])
-	if reg != 60 || val != 100 {
-		t.Errorf("Write reg=%d val=%d, want reg=60 val=100", reg, val)
+	if reg != 64 || val != 100 {
+		t.Errorf("Write reg=%d val=%d, want reg=64 val=100", reg, val)
 	}
 
 	// Verify write was logged
@@ -392,4 +393,105 @@ func TestWriteSingleProtected(t *testing.T) {
 
 	server.Close()
 	client.Close()
+}
+
+func TestWriteSingleRejectsBeforeSending(t *testing.T) {
+	tests := []struct {
+		name    string
+		reg     uint16
+		value   uint16
+		wantMsg string
+	}{
+		{"comm address not writable", 15, 2, "not writable"},
+		{"charge voltage not writable", 99, 560, "not writable"},
+		{"soc out of range", 67, 150, "out of range"},
+		{"invalid schedule time", 68, 25, "invalid schedule time"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// No connection: a rejected write must fail validation before
+			// ever reaching the "not connected" check.
+			c := NewClient("1.2.3.4", 8000, "AAAAAAAAAA", "1234567890")
+			err := c.WriteSingle(tt.reg, tt.value)
+			if err == nil || !strings.Contains(err.Error(), tt.wantMsg) {
+				t.Errorf("WriteSingle(%d, %d) err = %v, want containing %q", tt.reg, tt.value, err, tt.wantMsg)
+			}
+			if n, _ := c.WriteGuardStats(); n != 0 {
+				t.Errorf("rejected write was recorded (%d writes)", n)
+			}
+		})
+	}
+}
+
+// serveHolding answers the next request read from server with a holding
+// response for start/values (nil values = read the request, never answer).
+func serveHolding(server net.Conn, start uint16, values []uint16) {
+	go func() {
+		buf := make([]byte, 1024)
+		if _, err := server.Read(buf); err != nil {
+			return
+		}
+		if values != nil {
+			server.Write(buildResponsePacket(ModbusReadHolding, start, values))
+		}
+	}()
+}
+
+func TestReadHoldingRange(t *testing.T) {
+	c := NewClient("1.2.3.4", 8000, "AAAAAAAAAA", "1234567890")
+	server, client := net.Pipe()
+	defer server.Close()
+	c.conn = client
+
+	serveHolding(server, 66, []uint16{100, 80, 22, 6})
+	got, err := c.ReadHoldingRange(66, 4, 2*time.Second)
+	if err != nil {
+		t.Fatalf("ReadHoldingRange: %v", err)
+	}
+	want := map[uint16]uint16{66: 100, 67: 80, 68: 22, 69: 6}
+	for r, v := range want {
+		if got[r] != v {
+			t.Errorf("reg %d = %d, want %d", r, got[r], v)
+		}
+	}
+
+	// The connection stays usable for a second read (same-connection verify).
+	serveHolding(server, 21, []uint16{0x8FC3})
+	got, err = c.ReadHoldingRange(21, 1, 2*time.Second)
+	if err != nil || got[21] != 0x8FC3 {
+		t.Fatalf("second ReadHoldingRange = %v, %v", got, err)
+	}
+}
+
+func TestReadHoldingRangeIgnoresStaleCache(t *testing.T) {
+	c := NewClient("1.2.3.4", 8000, "AAAAAAAAAA", "1234567890")
+	server, client := net.Pipe()
+	defer server.Close()
+	c.conn = client
+
+	// A value cached before the request must not satisfy the read.
+	c.updateRegisters(&Packet{RegisterType: "holding", Registers: map[uint16]uint16{21: 0x9999}})
+	serveHolding(server, 21, nil)
+	if _, err := c.ReadHoldingRange(21, 1, 200*time.Millisecond); err == nil {
+		t.Fatal("ReadHoldingRange succeeded with no response; stale cache was used")
+	}
+	if _, ok := c.GetHolding(21); ok {
+		t.Error("stale cached value survived a failed read")
+	}
+}
+
+func TestReadHoldingRangePartial(t *testing.T) {
+	c := NewClient("1.2.3.4", 8000, "AAAAAAAAAA", "1234567890")
+	server, client := net.Pipe()
+	defer server.Close()
+	c.conn = client
+
+	serveHolding(server, 66, []uint16{100, 80})
+	got, err := c.ReadHoldingRange(66, 4, 200*time.Millisecond)
+	if err == nil {
+		t.Fatalf("ReadHoldingRange returned %v with only 2 of 4 registers", got)
+	}
+	if !strings.Contains(err.Error(), "2 of 4") {
+		t.Errorf("err = %v, want it to report 2 of 4 received", err)
+	}
 }

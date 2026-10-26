@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -61,7 +60,7 @@ func init() {
 	setScheduleCmd.Flags().IntP("soc", "s", -1, "SOC limit % (0-100)")
 	setScheduleCmd.Flags().BoolP("yes", "y", false, "skip confirmation prompt")
 	setScheduleCmd.Flags().Int("wait", 5, "max seconds to wait for read/verify")
-	setScheduleCmd.Flags().Bool("json", false, "output as JSON (implies --yes)")
+	setScheduleCmd.Flags().Bool("json", false, "output as JSON (prompt goes to stderr; use --yes to skip it)")
 	rootCmd.AddCommand(setScheduleCmd)
 }
 
@@ -79,9 +78,6 @@ func runSetSchedule(cmd *cobra.Command, args []string) error {
 	power, _ := cmd.Flags().GetInt("power")
 	soc, _ := cmd.Flags().GetInt("soc")
 	jsonFlag, _ := cmd.Flags().GetBool("json")
-	if jsonFlag {
-		yes = true
-	}
 
 	typeName := strings.ToLower(args[0])
 	sched, ok := scheduleTypes[typeName]
@@ -100,11 +96,6 @@ func runSetSchedule(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build list of writes
-	type regWrite struct {
-		reg  uint16
-		val  uint16
-		desc string
-	}
 	var writes []regWrite
 
 	startReg := sched.periods[period-1][0]
@@ -127,14 +118,24 @@ func runSetSchedule(cmd *cobra.Command, args []string) error {
 		writes = append(writes, regWrite{sched.socReg, uint16(soc), fmt.Sprintf("SOC Limit → %d%%", soc)})
 	}
 
-	// Read current values
+	// Validate every write up front so a rejected value can never leave the
+	// schedule half-applied.
+	for _, w := range writes {
+		if err := lux.ValidateWrite(w.reg, w.val); err != nil {
+			return err
+		}
+	}
+
+	// The whole schedule group (power, SOC, three windows) is read and verified
+	groupCount := sched.periods[2][1] - sched.powerReg + 1
+
+	// Read current values; the connection is closed before prompting
 	client, err := newClient(cmd)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
-
-	currentVals, err := readHoldingRegs(client, sched.powerReg, sched.periods[2][1]-sched.powerReg+1, wait)
+	currentVals, err := readHoldingRegs(client, sched.powerReg, groupCount, wait)
+	client.Close()
 	if err != nil {
 		return fmt.Errorf("read current schedule: %w", err)
 	}
@@ -150,86 +151,91 @@ func runSetSchedule(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 
-	if !yes {
-		fmt.Print("Confirm? [y/N] ")
-		reader := bufio.NewReader(os.Stdin)
-		line, _ := reader.ReadString('\n')
-		line = strings.TrimSpace(strings.ToLower(line))
-		if line != "y" && line != "yes" {
-			fmt.Println("Cancelled.")
-			return nil
-		}
+	if !confirm(cmd, yes, jsonFlag, "Confirm? [y/N] ") {
+		return nil
 	}
 
-	// Reconnect and write
+	// Reconnect; write and verify on the same connection
 	client2, err := newClient(cmd)
 	if err != nil {
 		return fmt.Errorf("reconnect: %w", err)
 	}
 	defer client2.Close()
 
-	for _, w := range writes {
-		if err := client2.WriteSingle(w.reg, w.val); err != nil {
-			return fmt.Errorf("write h%d: %w", w.reg, err)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	if !jsonFlag {
+	applied, applyErr := applyWrites(&pacedWriter{client2}, writes)
+	if applyErr == nil && !jsonFlag {
 		fmt.Print("Written. ")
 	}
 
-	// Verify
+	// Verify against what the inverter actually holds now — also after a
+	// partial failure, so the user sees which half of the window landed.
 	time.Sleep(500 * time.Millisecond)
-	verifyVals, err := readHoldingRegs(client2, sched.powerReg, sched.periods[2][1]-sched.powerReg+1, wait)
+	verifyVals, readErr := readHoldingRegs(client2, sched.powerReg, groupCount, wait)
+	verifyErr := verifyWrites(writes, verifyVals)
 
 	if jsonFlag {
 		type writeResult struct {
-			Register uint16 `json:"register"`
-			Name     string `json:"name"`
-			OldRaw   uint16 `json:"old_raw"`
-			NewRaw   uint16 `json:"new_raw"`
-			Written  bool   `json:"written"`
-			Verified bool   `json:"verified"`
+			Register  uint16  `json:"register"`
+			Name      string  `json:"name"`
+			OldRaw    uint16  `json:"old_raw"`
+			NewRaw    uint16  `json:"new_raw"`
+			Written   bool    `json:"written"`
+			Verified  bool    `json:"verified"`
+			VerifyRaw *uint16 `json:"verify_raw,omitempty"`
 		}
 		var results []writeResult
-		for _, w := range writes {
+		for i, w := range writes {
 			wr := writeResult{
 				Register: w.reg,
 				Name:     lux.RegisterName("holding", w.reg),
 				OldRaw:   currentVals[w.reg],
 				NewRaw:   w.val,
-				Written:  true,
+				Written:  i < applied,
 			}
-			if err == nil {
-				wr.Verified = verifyVals[w.reg] == w.val
+			if v, ok := verifyVals[w.reg]; ok {
+				wr.VerifyRaw = &v
+				wr.Verified = v == w.val
 			}
 			results = append(results, wr)
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(map[string]any{
+		if err := enc.Encode(map[string]any{
 			"schedule": typeName,
 			"writes":   results,
-		})
-	}
-
-	if err != nil {
-		fmt.Println("Verify: could not read back registers")
-		return nil
-	}
-
-	allOk := true
-	for _, w := range writes {
-		if verifyVals[w.reg] != w.val {
-			fmt.Printf("WARNING: h%d expected %d, got %d\n", w.reg, w.val, verifyVals[w.reg])
-			allOk = false
+		}); err != nil {
+			return err
+		}
+	} else {
+		if readErr != nil {
+			fmt.Printf("Verify: could not read back registers: %v\n", readErr)
+		}
+		for _, w := range writes {
+			if v, ok := verifyVals[w.reg]; ok && v != w.val {
+				fmt.Printf("WARNING: h%d expected %d, got %d\n", w.reg, w.val, v)
+			}
+		}
+		if applyErr == nil && verifyErr == nil {
+			fmt.Println("Verified.")
 		}
 	}
-	if allOk {
-		fmt.Println("Verified.")
-	}
 
+	if applyErr != nil {
+		return applyErr
+	}
+	return verifyErr
+}
+
+// pacedWriter spaces consecutive writes so the dongle can keep up.
+type pacedWriter struct {
+	w holdingWriter
+}
+
+func (p *pacedWriter) WriteSingle(reg, val uint16) error {
+	if err := p.w.WriteSingle(reg, val); err != nil {
+		return err
+	}
+	time.Sleep(100 * time.Millisecond)
 	return nil
 }
 
@@ -310,40 +316,8 @@ func decodeTime(raw uint16) (int, int) {
 	return int(raw & 0xFF), int(raw >> 8)
 }
 
-// readHoldingRegs reads a contiguous range of holding registers.
+// readHoldingRegs reads a contiguous range of holding registers, returning an
+// error unless every register in the range was received.
 func readHoldingRegs(client *lux.Client, startReg, count uint16, waitSec int) (map[uint16]uint16, error) {
-	endReg := startReg + count - 1
-
-	timeout := time.After(time.Duration(waitSec) * time.Second)
-	go func() {
-		<-timeout
-		client.Close()
-	}()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- client.Listen(func(pkt *lux.Packet) {
-			allPresent := true
-			for r := startReg; r <= endReg; r++ {
-				if _, ok := client.GetHolding(r); !ok {
-					allPresent = false
-					break
-				}
-			}
-			if allPresent {
-				client.Close()
-			}
-		})
-	}()
-
-	client.ReadHold(startReg, count)
-	<-done
-
-	result := make(map[uint16]uint16)
-	for r := startReg; r <= endReg; r++ {
-		if v, ok := client.GetHolding(r); ok {
-			result[r] = v
-		}
-	}
-	return result, nil
+	return client.ReadHoldingRange(startReg, count, time.Duration(waitSec)*time.Second)
 }

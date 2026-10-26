@@ -1,10 +1,10 @@
 package cmd
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -42,11 +42,16 @@ var setModeCmd = &cobra.Command{
 	Short: "Toggle an inverter mode flag",
 	Long: `Toggle a bit in the master function bitmask (register 21).
 
-Uses read-modify-write: reads current value, flips the target bit, writes back.
+Uses read-modify-write: reads current value, flips the target bit, then
+re-reads register 21 on the write connection and aborts if it changed since
+you confirmed, writes, and verifies on that same connection.
 
 Available modes:
   ac-charge, forced-discharge, charge-priority, feed-in-grid,
   eps, standby, seamless-eps, and others (see lux read h21)
+
+Turning off a protection function (antiisland, neutraldetect, iso, gfci, dci)
+is refused unless --allow-protection-disable is given.
 
 Examples:
   lux set-mode ac-charge on
@@ -59,7 +64,9 @@ Examples:
 func init() {
 	setModeCmd.Flags().BoolP("yes", "y", false, "skip confirmation prompt")
 	setModeCmd.Flags().Int("wait", 5, "max seconds to wait for read/verify")
-	setModeCmd.Flags().Bool("json", false, "output as JSON (implies --yes)")
+	setModeCmd.Flags().Bool("json", false, "output as JSON (prompt goes to stderr; use --yes to skip it)")
+	setModeCmd.Flags().Bool("allow-protection-disable", false,
+		"permit turning OFF anti-islanding, neutral detect, ISO, GFCI or DCI protection")
 	rootCmd.AddCommand(setModeCmd)
 }
 
@@ -67,9 +74,8 @@ func runSetMode(cmd *cobra.Command, args []string) error {
 	yes, _ := cmd.Flags().GetBool("yes")
 	wait, _ := cmd.Flags().GetInt("wait")
 	jsonFlag, _ := cmd.Flags().GetBool("json")
-	if jsonFlag {
-		yes = true
-	}
+	allowProtection, _ := cmd.Flags().GetBool("allow-protection-disable")
+	waitDur := time.Duration(wait) * time.Second
 
 	modeName := strings.ToLower(args[0])
 	action := strings.ToLower(args[1])
@@ -90,6 +96,7 @@ func runSetMode(cmd *cobra.Command, args []string) error {
 		for k := range modeAliases {
 			names = append(names, k)
 		}
+		sort.Strings(names)
 		return fmt.Errorf("unknown mode %q\nAvailable: %s", args[0], strings.Join(names, ", "))
 	}
 
@@ -105,25 +112,19 @@ func runSetMode(cmd *cobra.Command, args []string) error {
 
 	bitName := lux.MasterFunctionBits[bit]
 
-	// Read current register 21
+	// Read current register 21; the connection is closed before prompting
 	client, err := newClient(cmd)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
-
-	current, err := readHoldingReg(client, 21, wait)
+	vals, err := client.ReadHoldingRange(21, 1, waitDur)
+	client.Close()
 	if err != nil {
 		return fmt.Errorf("read register 21: %w", err)
 	}
+	current := vals[21]
 
-	// Compute new value
-	var newVal uint16
-	if setOn {
-		newVal = current | (1 << bit)
-	} else {
-		newVal = current & ^(1 << bit)
-	}
+	newVal := applyModeBit(current, bit, setOn)
 
 	def, _ := lux.GetRegisterDef("holding", 21)
 
@@ -141,29 +142,39 @@ func runSetMode(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	warning, err := checkProtectionChange(current, newVal, allowProtection)
+	if err != nil {
+		return err
+	}
+	if warning != "" {
+		fmt.Fprintln(cmd.ErrOrStderr(), warning)
+	}
+
 	if !jsonFlag {
 		fmt.Printf("Mode:    %s → %s\n", bitName, strings.ToUpper(action))
 		fmt.Printf("Current: %s (raw: %d)\n", def.FormatValueOnly(current), current)
 		fmt.Printf("New:     %s (raw: %d)\n", def.FormatValueOnly(newVal), newVal)
 	}
 
-	if !yes {
-		fmt.Print("Confirm? [y/N] ")
-		reader := bufio.NewReader(os.Stdin)
-		line, _ := reader.ReadString('\n')
-		line = strings.TrimSpace(strings.ToLower(line))
-		if line != "y" && line != "yes" {
-			fmt.Println("Cancelled.")
-			return nil
-		}
+	if !confirm(cmd, yes, jsonFlag, "Confirm? [y/N] ") {
+		return nil
 	}
 
-	// Reconnect for write + verify
+	// Reconnect; re-read, write and verify all on this one connection
 	client2, err := newClient(cmd)
 	if err != nil {
 		return fmt.Errorf("reconnect: %w", err)
 	}
 	defer client2.Close()
+
+	fresh, err := client2.ReadHoldingRange(21, 1, waitDur)
+	if err != nil {
+		return fmt.Errorf("re-read register 21 before write: %w (nothing written)", err)
+	}
+	if fresh[21] != current {
+		return fmt.Errorf("register 21 changed since it was read (was %d, now %d); nothing written, re-run to retry",
+			current, fresh[21])
+	}
 
 	if err := client2.WriteSingle(21, newVal); err != nil {
 		return fmt.Errorf("write failed: %w", err)
@@ -174,29 +185,32 @@ func runSetMode(cmd *cobra.Command, args []string) error {
 
 	time.Sleep(500 * time.Millisecond)
 
-	verifyVal, err := readHoldingReg(client2, 21, wait)
+	got, _ := client2.ReadHoldingRange(21, 1, waitDur)
+	verifyVal, readOk := got[21]
+	verifyErr := verifyWrites([]regWrite{{reg: 21, val: newVal}}, got)
 
 	if jsonFlag {
 		result := map[string]any{
-			"mode":    modeName,
-			"bit":     bit,
-			"action":  action,
-			"old_raw": current,
-			"new_raw": newVal,
-			"written": true,
+			"mode":     modeName,
+			"bit":      bit,
+			"action":   action,
+			"old_raw":  current,
+			"new_raw":  newVal,
+			"written":  true,
+			"verified": verifyErr == nil,
 		}
-		if err == nil {
-			result["verified"] = verifyVal == newVal
+		if readOk {
 			result["verify_raw"] = verifyVal
-		} else {
-			result["verified"] = false
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		if err := enc.Encode(result); err != nil {
+			return err
+		}
+		return verifyErr
 	}
 
-	if err != nil {
+	if !readOk {
 		fmt.Println("Verify: could not read back register")
 	} else if verifyVal == newVal {
 		fmt.Printf("Verified: %s (raw: %d)\n", def.FormatValueOnly(verifyVal), verifyVal)
@@ -204,32 +218,13 @@ func runSetMode(cmd *cobra.Command, args []string) error {
 		fmt.Printf("WARNING: read-back mismatch! Expected %d, got %d\n", newVal, verifyVal)
 	}
 
-	return nil
+	return verifyErr
 }
 
-// readHoldingReg reads a single holding register with active request and timeout.
-func readHoldingReg(client *lux.Client, reg uint16, waitSec int) (uint16, error) {
-	timeout := time.After(time.Duration(waitSec) * time.Second)
-	go func() {
-		<-timeout
-		client.Close()
-	}()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- client.Listen(func(pkt *lux.Packet) {
-			if _, ok := client.GetHolding(reg); ok {
-				client.Close()
-			}
-		})
-	}()
-
-	client.ReadHold(reg, 1)
-	<-done
-
-	val, ok := client.GetHolding(reg)
-	if !ok {
-		return 0, fmt.Errorf("register %d not received", reg)
+// applyModeBit returns current with bit set (on) or cleared (off).
+func applyModeBit(current uint16, bit int, on bool) uint16 {
+	if on {
+		return current | (1 << bit)
 	}
-	return val, nil
+	return current &^ (1 << bit)
 }

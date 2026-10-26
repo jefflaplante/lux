@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -33,17 +32,25 @@ Examples:
 func init() {
 	writeCmd.Flags().BoolP("yes", "y", false, "skip confirmation prompt")
 	writeCmd.Flags().Int("wait", 5, "max seconds to wait for read/verify")
-	writeCmd.Flags().Bool("json", false, "output as JSON (implies --yes)")
+	writeCmd.Flags().Bool("json", false, "output as JSON (prompt goes to stderr; use --yes to skip it)")
 	rootCmd.AddCommand(writeCmd)
+}
+
+// validateWriteTarget rejects writes that must not go through "lux write":
+// anything off the allowlist or out of range, and raw writes to register 21,
+// which must use set-mode so protection bits are gated.
+func validateWriteTarget(reg, value uint16) error {
+	if reg == 21 {
+		return fmt.Errorf("register 21 (master function flags) cannot be written raw; use \"lux set-mode\"")
+	}
+	return lux.ValidateWrite(reg, value)
 }
 
 func runWrite(cmd *cobra.Command, args []string) error {
 	yes, _ := cmd.Flags().GetBool("yes")
 	wait, _ := cmd.Flags().GetInt("wait")
 	jsonFlag, _ := cmd.Flags().GetBool("json")
-	if jsonFlag {
-		yes = true
-	}
+	waitDur := time.Duration(wait) * time.Second
 
 	// Parse register
 	targets, err := parseRegArg(args[0])
@@ -74,37 +81,23 @@ func runWrite(cmd *cobra.Command, args []string) error {
 	}
 	target := holdingTargets[0]
 
-	// Parse value
+	// Parse and validate value before touching the network
 	val, err := strconv.ParseUint(args[1], 10, 16)
 	if err != nil {
 		return fmt.Errorf("invalid value %q: must be 0-65535", args[1])
 	}
 	newVal := uint16(val)
+	if err := validateWriteTarget(target.regNum, newVal); err != nil {
+		return err
+	}
 
-	// Connect and read current value
+	// Read current value; the connection is closed before prompting
 	client, err := newClient(cmd)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
-
-	timeout := time.After(time.Duration(wait) * time.Second)
-	go func() {
-		<-timeout
-		client.Close()
-	}()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- client.Listen(func(pkt *lux.Packet) {
-			if _, ok := client.GetHolding(target.regNum); ok {
-				client.Close()
-			}
-		})
-	}()
-
-	client.ReadHold(target.regNum, 1)
-	<-done
+	cur, readErr := client.ReadHoldingRange(target.regNum, 1, waitDur)
+	client.Close()
 
 	// Show current and proposed values
 	name := lux.RegisterName("holding", target.regNum)
@@ -112,7 +105,8 @@ func runWrite(cmd *cobra.Command, args []string) error {
 		name = fmt.Sprintf("r%d", target.regNum)
 	}
 
-	oldRaw, hasOld := client.GetHolding(target.regNum)
+	oldRaw, hasOld := cur[target.regNum]
+	hasOld = hasOld && readErr == nil
 
 	if hasOld && oldRaw == newVal {
 		if jsonFlag {
@@ -141,26 +135,17 @@ func runWrite(cmd *cobra.Command, args []string) error {
 		fmt.Printf("New:      %s (raw: %d)\n", formatRegValue("holding", target.regNum, newVal), newVal)
 	}
 
-	// Confirm
-	if !yes {
-		fmt.Print("Confirm write? [y/N] ")
-		reader := bufio.NewReader(os.Stdin)
-		line, _ := reader.ReadString('\n')
-		line = strings.TrimSpace(strings.ToLower(line))
-		if line != "y" && line != "yes" {
-			fmt.Println("Cancelled.")
-			return nil
-		}
+	if !confirm(cmd, yes, jsonFlag, "Confirm write? [y/N] ") {
+		return nil
 	}
 
-	// Reconnect for write + verify (previous connection was closed)
+	// Reconnect; write and verify on the same connection
 	client2, err := newClient(cmd)
 	if err != nil {
 		return fmt.Errorf("reconnect for write: %w", err)
 	}
 	defer client2.Close()
 
-	// Write
 	if err := client2.WriteSingle(target.regNum, newVal); err != nil {
 		return fmt.Errorf("write failed: %w", err)
 	}
@@ -171,26 +156,9 @@ func runWrite(cmd *cobra.Command, args []string) error {
 	// Wait for the dongle to process the write before reading back
 	time.Sleep(500 * time.Millisecond)
 
-	// Read-back verification
-	timeout2 := time.After(time.Duration(wait) * time.Second)
-	go func() {
-		<-timeout2
-		client2.Close()
-	}()
-
-	done2 := make(chan error, 1)
-	go func() {
-		done2 <- client2.Listen(func(pkt *lux.Packet) {
-			if _, ok := client2.GetHolding(target.regNum); ok {
-				client2.Close()
-			}
-		})
-	}()
-
-	client2.ReadHold(target.regNum, 1)
-	<-done2
-
-	verifyRaw, ok := client2.GetHolding(target.regNum)
+	got, _ := client2.ReadHoldingRange(target.regNum, 1, waitDur)
+	verifyRaw, ok := got[target.regNum]
+	verifyErr := verifyWrites([]regWrite{{reg: target.regNum, val: newVal}}, got)
 
 	if jsonFlag {
 		result := map[string]any{
@@ -201,14 +169,17 @@ func runWrite(cmd *cobra.Command, args []string) error {
 			"new_value": formatRegValue("holding", target.regNum, newVal),
 			"new_raw":   newVal,
 			"written":   true,
-			"verified":  ok && verifyRaw == newVal,
+			"verified":  verifyErr == nil,
 		}
 		if ok {
 			result["verify_raw"] = verifyRaw
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(result)
+		if err := enc.Encode(result); err != nil {
+			return err
+		}
+		return verifyErr
 	}
 
 	if !ok {
@@ -219,5 +190,5 @@ func runWrite(cmd *cobra.Command, args []string) error {
 		fmt.Printf("WARNING: read-back mismatch! Expected %d, got %d\n", newVal, verifyRaw)
 	}
 
-	return nil
+	return verifyErr
 }

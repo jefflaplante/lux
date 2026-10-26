@@ -20,6 +20,9 @@ type Client struct {
 	// Write safety
 	guard *WriteGuard
 
+	// Unconsumed bytes from ReadHoldingRange (may hold a partial frame)
+	rbuf []byte
+
 	// Latest register snapshots
 	holdingMu sync.RWMutex
 	holding   map[uint16]uint16
@@ -167,6 +170,61 @@ func (c *Client) ReadHold(startReg, count uint16) error {
 	return nil
 }
 
+// ReadHoldingRange requests count holding registers starting at start and
+// blocks until responses covering the whole range arrive or timeout elapses.
+// Cached values for the range are discarded first, so a successful result
+// always reflects data received after the request — safe for write
+// verification. The connection stays open. Must not be used concurrently
+// with Listen on the same client.
+func (c *Client) ReadHoldingRange(start, count uint16, timeout time.Duration) (map[uint16]uint16, error) {
+	if c.conn == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+	end := start + count - 1
+
+	c.holdingMu.Lock()
+	for r := start; r <= end; r++ {
+		delete(c.holding, r)
+	}
+	c.holdingMu.Unlock()
+
+	if err := c.ReadHold(start, count); err != nil {
+		return nil, err
+	}
+
+	collect := func() (map[uint16]uint16, bool) {
+		result := make(map[uint16]uint16, count)
+		for r := start; r <= end; r++ {
+			if v, ok := c.GetHolding(r); ok {
+				result[r] = v
+			}
+		}
+		return result, len(result) == int(count)
+	}
+
+	deadline := time.Now().Add(timeout)
+	tmp := make([]byte, 4096)
+	for {
+		if err := c.conn.SetReadDeadline(deadline); err != nil {
+			return nil, err
+		}
+		n, err := c.conn.Read(tmp)
+		if err != nil {
+			got, _ := collect()
+			return got, fmt.Errorf("read h%d-h%d: %d of %d registers received: %w", start, end, len(got), count, err)
+		}
+		c.rbuf = append(c.rbuf, tmp[:n]...)
+		packets, consumed := FindPackets(c.rbuf)
+		c.rbuf = c.rbuf[consumed:]
+		for _, pkt := range packets {
+			c.updateRegisters(pkt)
+		}
+		if got, ok := collect(); ok {
+			return got, nil
+		}
+	}
+}
+
 // ReadInput sends a ReadInput request to the inverter.
 // The response will be received asynchronously via Listen().
 func (c *Client) ReadInput(startReg, count uint16) error {
@@ -187,11 +245,15 @@ func (c *Client) ReadInput(startReg, count uint16) error {
 
 // WriteSingle sends a WriteSingle request to write a single holding register.
 // Performs safety checks before writing:
+// - Rejects registers not on the write allowlist and out-of-range values
 // - Rejects writes to protected registers (25-53)
-// - Enforces rate limiting (max 10 writes/minute)
-// - Logs all write attempts
+// - Enforces rate limiting (max 10 writes/minute, per client)
+// - Records all write attempts in an in-memory log
 func (c *Client) WriteSingle(reg, value uint16) error {
-	// Safety check
+	// Safety checks
+	if err := ValidateWrite(reg, value); err != nil {
+		return err
+	}
 	if err := c.guard.Check(reg); err != nil {
 		return err
 	}

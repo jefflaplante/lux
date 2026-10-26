@@ -101,3 +101,80 @@ func TestWriteLogEntry(t *testing.T) {
 		t.Error("Entry timestamp should not be zero")
 	}
 }
+
+func TestValidateWrite(t *testing.T) {
+	tests := []struct {
+		name    string
+		reg     uint16
+		value   uint16
+		wantErr bool
+	}{
+		{"master flags any bitmask", 21, 0xFFFF, false},
+		{"charge power 100%", 64, 100, false},
+		{"charge power 101%", 64, 101, true},
+		{"discharge power 0%", 65, 0, false},
+		{"ac charge soc 80", 67, 80, false},
+		{"ac charge soc 150", 67, 150, true},
+		{"schedule time 22:30", 68, (30 << 8) | 22, false},
+		{"schedule time 00:00", 89, 0, false},
+		{"schedule hour 24", 68, 24, true},
+		{"schedule minute 60", 76, 60 << 8, true},
+		{"feed-in limit 100", 103, 100, false},
+		{"discharge cutoff soc 10", 105, 10, false},
+		{"eps cutoff soc 101", 125, 101, true},
+		{"ac charge start soc 20", 160, 20, false},
+		{"ac charge end soc 101", 161, 101, true},
+		// Not on the allowlist, regardless of value.
+		{"comm address", 15, 1, true},
+		{"lead-acid charge voltage", 99, 560, true},
+		{"lead-acid cutoff voltage", 100, 480, true},
+		{"floating voltage", 144, 540, true},
+		{"shutdown voltage", 158, 400, true},
+		{"grid charge stop voltage", 159, 590, true},
+		{"warning voltage", 162, 480, true},
+		{"switch-to-grid voltage", 166, 480, true},
+		{"on-grid EOD voltage", 169, 480, true},
+		{"clock", 12, 0x031A, true},
+		{"grid protection", 30, 100, true},
+		{"model", 0, 1, true},
+		{"undefined register", 200, 1, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateWrite(tt.reg, tt.value)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateWrite(%d, %d) err = %v, wantErr %v", tt.reg, tt.value, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestClearedProtectionBits(t *testing.T) {
+	tests := []struct {
+		name     string
+		old, new uint16
+		want     []string
+	}{
+		{"no change", 0x8FC3, 0x8FC3, nil},
+		{"clear ac charge only", MasterACChargeEnable | MasterAntiIsland, MasterAntiIsland, nil},
+		{"enable gfci", 0, MasterGFCI, nil},
+		{"clear anti-island", MasterAntiIsland, 0, []string{"AntiIsland"}},
+		{"clear gfci", MasterGFCI | MasterEPSEnable, MasterEPSEnable, []string{"GFCI"}},
+		{"clear iso", MasterISO, 0, []string{"ISO"}},
+		{"clear several", MasterNeutralDetect | MasterDCI | MasterISO, 0, []string{"NeutralDetect", "ISO", "DCI"}},
+		{"protection bit already clear", 0, 0, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ClearedProtectionBits(tt.old, tt.new)
+			if len(got) != len(tt.want) {
+				t.Fatalf("ClearedProtectionBits(%#04x, %#04x) = %v, want %v", tt.old, tt.new, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("ClearedProtectionBits(%#04x, %#04x) = %v, want %v", tt.old, tt.new, got, tt.want)
+				}
+			}
+		})
+	}
+}
