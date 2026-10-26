@@ -383,3 +383,24 @@ func TestModeAliasesValid(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveModeNormalizesInput(t *testing.T) {
+	cases := map[string]int{
+		"seamless-eps":     8,
+		"SeamlessEPS":      8,
+		"seamlesseps":      8,
+		"Seamless-EPS":     8,
+		"ac-charge":        7,
+		"forced-discharge": 10,
+		"feed-in-grid":     15,
+		"anti-island":      4,
+	}
+	for in, want := range cases {
+		if got, ok := resolveMode(in); !ok || got != want {
+			t.Errorf("resolveMode(%q) = %d, %v; want %d, true", in, got, ok, want)
+		}
+	}
+	if _, ok := resolveMode("not-a-mode"); ok {
+		t.Error(`resolveMode("not-a-mode") resolved, want unknown`)
+	}
+}

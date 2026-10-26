@@ -13,7 +13,7 @@ import (
 )
 
 // modeAliases maps user-friendly names to bit positions in register 21.
-// Case-insensitive lookup is done via strings.ToLower.
+// Lookup goes through resolveMode, which ignores case and dashes.
 var modeAliases = map[string]int{
 	"eps":              0,
 	"overloadderate":   1,
@@ -80,17 +80,7 @@ func runSetMode(cmd *cobra.Command, args []string) error {
 	modeName := strings.ToLower(args[0])
 	action := strings.ToLower(args[1])
 
-	bit, ok := modeAliases[modeName]
-	if !ok {
-		// Try exact match against MasterFunctionBits values
-		for b, name := range lux.MasterFunctionBits {
-			if strings.EqualFold(name, modeName) {
-				bit = b
-				ok = true
-				break
-			}
-		}
-	}
+	bit, ok := resolveMode(modeName)
 	if !ok {
 		var names []string
 		for k := range modeAliases {
@@ -219,6 +209,22 @@ func runSetMode(cmd *cobra.Command, args []string) error {
 	}
 
 	return verifyErr
+}
+
+// resolveMode maps a user-supplied mode name to its bit in register 21.
+// Lookup ignores case and dashes, so "seamless-eps" and "SeamlessEPS" both
+// resolve; names are tried against modeAliases, then MasterFunctionBits.
+func resolveMode(name string) (int, bool) {
+	key := strings.ReplaceAll(strings.ToLower(name), "-", "")
+	if bit, ok := modeAliases[key]; ok {
+		return bit, true
+	}
+	for b, n := range lux.MasterFunctionBits {
+		if strings.EqualFold(n, key) {
+			return b, true
+		}
+	}
+	return 0, false
 }
 
 // applyModeBit returns current with bit set (on) or cleared (off).
