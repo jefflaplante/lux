@@ -29,8 +29,8 @@ func TestRegisterMQTTTopics(t *testing.T) {
 		{"temperature 42C", InputMQTTTopics, 65, "inverter_1/temperature", 42, "107.6"},
 		{"temperature 43C", InputMQTTTopics, 65, "inverter_1/temperature", 43, "109.4"},
 		{"temperature 0C", InputMQTTTopics, 65, "inverter_1/temperature", 0, "32.0"},
-		{"device_mode Solar/Battery", InputMQTTTopics, 0, "inverter_1/device_mode", 0x0C, "Solar/Battery"},
-		{"device_mode Solar/Grid", InputMQTTTopics, 0, "inverter_1/device_mode", 0x12, "Solar/Grid"},
+		{"device_mode protocol name for 0x0C", InputMQTTTopics, 0, "inverter_1/device_mode", 0x0C, "PV Charge On-grid"},
+		{"device_mode unknown 0x12", InputMQTTTopics, 0, "inverter_1/device_mode", 0x12, "Unknown(0x12)"},
 		{"device_mode fallback", InputMQTTTopics, 0, "inverter_1/device_mode", 0x08, "PV Charge"},
 		{"device_mode unknown", InputMQTTTopics, 0, "inverter_1/device_mode", 0x99, "Unknown(0x99)"},
 	}

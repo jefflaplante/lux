@@ -25,17 +25,7 @@ func fmtTime(raw uint16) string {
 	return fmt.Sprintf("%02d:%02d", hour, min)
 }
 
-// SAModeNames overrides StatusCodes with the strings Solar Assistant publishes
-// for device_mode. Only codes observed live are listed.
-var SAModeNames = map[uint16]string{
-	0x0C: "Solar/Battery",
-	0x12: "Solar/Grid",
-}
-
 func fmtStatus(raw uint16) string {
-	if name, ok := SAModeNames[raw]; ok {
-		return name
-	}
 	if name, ok := StatusCodes[raw]; ok {
 		return name
 	}

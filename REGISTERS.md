@@ -226,8 +226,11 @@ Live data from the inverter. Read in blocks of 40 registers:
 | 0x80 | PV Off-grid |
 | 0xC0 | PV & Battery Off-grid |
 
-The MQTT publisher's `device_mode` topic uses Solar Assistant's strings for codes
-observed live (0x0C → "Solar/Battery", 0x12 → "Solar/Grid") and falls back to this table.
+The MQTT publisher's `device_mode` topic uses this table verbatim. Note: Solar
+Assistant's own `device_mode` strings ("Solar/Battery" vs "Solar/Grid") flip
+between sessions with identical register values, so they are context-derived,
+not register reads — we do not imitate them. A/B-verified 2026-10-26: same i0
+value, SA label changed across the day while ours stays stable.
 
 ### Solar Assistant parity notes (MQTT publisher)
 
