@@ -93,8 +93,8 @@ These are the configuration registers. Read with ReadHold (3), write with WriteS
 |-----|------|-------------|-----|
 | 66 | AC_CHARGE_POWER_CMD | Grid charge power rate (%) | RW |
 | 67 | AC_CHARGE_SOC_LIMIT | AC charge SOC limit (%) | RW |
-| 68 | AC_CHARGE_START_0 | Period 0 start: hour(MSB) minute(LSB) | RW |
-| 69 | AC_CHARGE_END_0 | Period 0 end: hour(MSB) minute(LSB) | RW |
+| 68 | AC_CHARGE_START_0 | Period 0 start: hour(LSB) minute(MSB) | RW |
+| 69 | AC_CHARGE_END_0 | Period 0 end: hour(LSB) minute(MSB) | RW |
 | 70 | AC_CHARGE_START_1 | Period 1 start | RW |
 | 71 | AC_CHARGE_END_1 | Period 1 end | RW |
 | 72 | AC_CHARGE_START_2 | Period 2 start | RW |
@@ -155,12 +155,14 @@ Reg 14: second (high byte)| minute (low byte)       → e.g., 0x1E1E = 30:30
 
 ### Time Schedule Encoding
 
-All schedule registers (68-89, 152-157) pack hour and minute into one u16:
+All schedule registers (68-89, 152-157) pack hour and minute into one u16,
+**hour in the low byte**:
 ```
-value = (hour << 8) | minute
-hour   = value >> 8
-minute = value & 0xFF
+value  = (minute << 8) | hour
+hour   = value & 0xFF
+minute = value >> 8
 ```
+Verified against Solar Assistant 2026-10-26: h69 raw 15127 (0x3B17) = `23:59`.
 
 ---
 
@@ -205,8 +207,8 @@ Live data from the inverter. Read in blocks of 40 registers:
 | 34 | e_dischg_day | ÷10 | kWh | Battery discharge today |
 | 36 | e_to_grid_day | ÷10 | kWh | Grid export today |
 | 37 | e_to_user_day | ÷10 | kWh | Grid import today |
-| 65 | t_radiator_1 | - | °C | Heat-sink temperature — SA `temperature` reports it in °F (raw×1.8+32; 42 °C → 107.6 °F) |
-| 67 | t_bat | ÷10 | °F | Battery temperature (°F×10; raw 885 = 88.5 °F) — see SA note below |
+| 65 | t_radiator_1 | - | °C | Heat-sink temperature, signed int16 — SA `temperature` reports it in °F (raw×1.8+32; 42 °C → 107.6 °F) |
+| 67 | t_bat | ÷10 | °F | Battery temperature (°F×10; raw 885 = 88.5 °F, signed) — see SA note below |
 
 ### Inverter Status Codes
 
@@ -218,7 +220,7 @@ Live data from the inverter. Read in blocks of 40 registers:
 | 0x0C | PV Charge On-grid |
 | 0x10 | Battery On-grid |
 | 0x11 | Bypass |
-| 0x12 | (unnamed; SA reports "Solar/Grid", observed evening 2026-10-26) |
+| 0x12 | (no protocol name; published as `Unknown(0x12)`; observed evening 2026-10-26) |
 | 0x14 | PV & Battery On-grid |
 | 0x20 | AC Charge |
 | 0x28 | PV & AC Charge |
@@ -235,7 +237,9 @@ value, SA label changed across the day while ours stays stable.
 ### Solar Assistant parity notes (MQTT publisher)
 
 - `total/battery_power` = i10 − i11: **positive = charging**, negative = discharging (SA sign convention).
-- `inverter_1/load_power` = i16 + i27 − i26 (inverter output + net grid import = house load).
+- `inverter_1/load_power` = i16 + i27 − i26 (inverter output + net grid import = house load), clamped ≥ 0.
+- `inverter_1/ac_output_frequency` = i23 (output/EPS frequency; ≡ i15 while grid-tied, correct when
+  islanded), falling back to i15 only when i23 is implausible.
 - `total/battery_temperature`: SA publishes a constant 242.6 on this install, which matches a
   PV string voltage raw value (2426), i.e. a corrupt/misaligned aggregate. lux intentionally
   publishes the real sensor (i67 ÷10, °F) instead of chasing parity.
@@ -251,6 +255,13 @@ For managing battery schedules, these are the critical ones:
 - Hold reg 21: Current mode flags (what's enabled)
 
 ### Write (control)
+
+This list is the write allowlist enforced by `lux.ValidateWrite` (plus 103, feed-in limit %).
+Percent/SOC registers accept 0–100 and schedule times must decode to a valid HH:MM; every
+other holding register — including comm address (15) and all battery voltage setpoints —
+is rejected. Reg 21 is written only through `lux set-mode`, which refuses to clear
+protection bits (4, 5, 12, 13, 14) without `--allow-protection-disable`.
+
 - **Reg 21**: Enable/disable AC charge, forced discharge, charge priority, grid feed-in
 - **Regs 64-65**: Charge/discharge power rate
 - **Regs 66-73**: AC charge schedule (3 time periods + SOC limit)

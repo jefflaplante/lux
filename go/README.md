@@ -266,7 +266,7 @@ The dongle broadcasts these packets in rotation (~2s intervals):
 | Power Factor | Raw ÷ 1000 | 1000 → 1.000 |
 | Percentage | Raw as-is | 85 → 85% |
 | Power | Raw as-is | 3500 → 3500W |
-| Time | High byte:Low byte | 0x0E1E → 14:30 |
+| Time | Hour = low byte, minute = high byte | 0x1E0E → 14:30 |
 | SOC/SOH | Low byte=SOC, High byte=SOH | 0x6455 → SOC=85%, SOH=100% |
 | 32-bit values | Two registers (lo, hi) | Combine: `(hi << 16) | lo` then ÷10 for kWh |
 
@@ -344,7 +344,8 @@ These are 32-bit values split across two registers. Combine `(hi << 16) | lo` th
 | 64 | Internal Temp | - | °C | -10 to 70°C |
 | 65 | Radiator 1 Temp | - | °C | -10 to 85°C |
 | 66 | Radiator 2 Temp | - | °C | -10 to 85°C |
-| 68 | Battery Temp | ÷10 | °C | -10 to 50°C |
+| 67 | Battery Temp | ÷10 | °F | signed; raw 885 = 88.5°F |
+| 68 | Battery Temp Scaled | ÷10 | °C | -10 to 50°C |
 
 ### BMS Data (89-114)
 
@@ -418,7 +419,7 @@ These registers control grid voltage/frequency trip points per IEEE 1547/UL1741.
 | 25-36 | Grid voltage high/low limits and trip times |
 | 38-53 | Grid frequency high/low limits and trip times |
 
-**The CLI blocks writes to registers 25-53.**
+**The CLI blocks writes to registers 25-53.** More broadly, only allowlisted registers can be written at all (see Safety Considerations).
 
 ### Power Control (60-65)
 
@@ -545,12 +546,12 @@ client.WriteSingle(21, newValue)
 
 ### Setting Time Schedules
 
-Time values are packed as `(hour << 8) | minute`:
+Time values are packed as `(minute << 8) | hour` (hour in the low byte):
 
 ```go
 // Set AC charge window to 02:00 - 06:00
-startTime := (2 << 8) | 0   // 02:00 = 0x0200 = 512
-endTime := (6 << 8) | 0     // 06:00 = 0x0600 = 1536
+startTime := (0 << 8) | 2   // 02:00 = 0x0002 = 2
+endTime := (0 << 8) | 6     // 06:00 = 0x0006 = 6
 client.WriteSingle(68, startTime)  // Period 1 start
 client.WriteSingle(69, endTime)    // Period 1 end
 ```
@@ -571,8 +572,8 @@ client.WriteSingle(64, 50)
 
 ```go
 // 1. Set AC charge window (02:00 - 06:00)
-client.WriteSingle(68, 0x0200)  // Start 02:00
-client.WriteSingle(69, 0x0600)  // End 06:00
+client.WriteSingle(68, 0x0002)  // Start 02:00
+client.WriteSingle(69, 0x0006)  // End 06:00
 
 // 2. Set charge rate and SOC limit
 client.WriteSingle(66, 100)    // 100% charge rate
@@ -597,16 +598,21 @@ Registers 25-53 contain **grid protection settings** required for electrical cod
 - Violate grid interconnection requirements
 - Void your warranty
 
+### Write Allowlist
+
+Only these holding registers can be written: 21 (via `lux set-mode` only), 64–65, the three schedules 66–89, 103, 105, 125, 160–161. Percent/SOC values must be 0–100 and schedule times must be valid HH:MM. Everything else — comm address (15), clock, and every battery voltage setpoint (99, 100, 144, 158, 159, 162, 166, 169) — is rejected by the library before anything is sent.
+
+`lux set-mode` refuses to turn off a protection function (anti-islanding, neutral detect, ISO, GFCI, DCI) unless `--allow-protection-disable` is passed, and prints a warning when it is.
+
+Every write asks for confirmation; only `--yes` skips it (`--json` alone does not). Writes are read back and the command exits nonzero if the read-back is missing or differs.
+
 ### Rate Limiting
 
-The CLI enforces a rate limit of **10 writes per minute** to prevent:
-- Accidental rapid-fire writes
-- EEPROM wear (limited write cycles)
-- Bus contention issues
+The library enforces **10 writes per minute per process**. The counter lives in memory and starts empty on every CLI invocation, so it caps a single command (e.g. a runaway script loop inside one process), not writes across separate invocations.
 
 ### Write Logging
 
-All write attempts are logged with timestamp, register, old value, new value, and success status for audit purposes.
+Write attempts (timestamp, register, old value, new value, success) are kept **in memory only**, the last 100 per process, and exposed via `Client.WriteGuardStats()`. Nothing is written to disk, so there is no persistent audit trail.
 
 ### Recommended Practices
 
