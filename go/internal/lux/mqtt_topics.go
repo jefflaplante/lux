@@ -88,13 +88,13 @@ var HoldingMQTTTopics = map[uint16][]MQTTMapping{
 
 // MasterFlagTopics maps bit positions in register 21 to Solar Assistant topic names.
 var MasterFlagTopics = map[int]string{
-	7:  "inverter_1/grid_charge",            // ACCharge
-	10: "inverter_1/forced_discharge",       // ForcedDischarge
-	11: "inverter_1/charge_priority",        // ChargePriority
-	15: "inverter_1/export_to_grid",         // FeedInGrid
-	0:  "inverter_1/eps_enable",             // EPS
-	6:  "inverter_1/grid_peak_shaving",      // GridOnPowerSS
-	4:  "inverter_1/generator_peak_shaving", // AntiIsland (SA maps this differently)
+	7:  "inverter_1/grid_charge",                     // ACCharge
+	10: "inverter_1/forced_discharge",                // ForcedDischarge
+	11: "inverter_1/charge_priority",                 // ChargePriority
+	15: "inverter_1/export_to_grid",                  // FeedInGrid
+	0:  "inverter_1/eps_enable",                      // EPS
+	6:  "inverter_1/grid_on_power_soft_start_enable", // GridOnPowerSS (was mislabeled grid_peak_shaving)
+	4:  "inverter_1/anti_island_enable",              // AntiIsland (was mislabeled generator_peak_shaving)
 }
 
 // ComputedTopics generates derived topic→value pairs from a full set of input registers.

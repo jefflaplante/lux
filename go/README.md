@@ -57,8 +57,9 @@ The `publish` command streams inverter data to an MQTT broker using **Solar Assi
 # Basic usage (requires host and broker)
 lux publish --host 192.168.1.100 --broker tcp://192.168.1.50:1883
 
-# Custom broker and topic prefix
-lux publish --broker tcp://192.168.1.100:1883 --prefix solar_assistant
+# Custom broker and topic prefix (default prefix is "lux"; only use
+# "solar_assistant" if Solar Assistant is NOT publishing to the same broker)
+lux publish --broker tcp://192.168.1.100:1883 --prefix lux
 
 # With authentication
 lux publish --username myuser --password mypass
@@ -75,9 +76,10 @@ lux publish --log-json
 | Flag | Default | Env Var | Description |
 |------|---------|---------|-------------|
 | `--broker` | (required) | `LUX_BROKER` | MQTT broker URL |
-| `--prefix` | solar_assistant | `LUX_PREFIX` | Topic prefix |
+| `--prefix` | lux | `LUX_PREFIX` | Topic prefix |
 | `--username` | | `LUX_MQTT_USER` | MQTT username |
 | `--password` | | `LUX_MQTT_PASS` | MQTT password |
+| `--client-id` | lux-publish-&lt;hostname&gt;-&lt;pid&gt; | `LUX_MQTT_CLIENT_ID` | MQTT client ID (unique per process so two publishers don't kick each other off) |
 | `--retain` | true | `LUX_RETAIN` | Use MQTT retain flag |
 | `--quiet` | false | `LUX_QUIET` | Suppress per-packet logging |
 | `--log-json` | false | `LUX_LOG_JSON` | Output logs as JSON lines |
@@ -88,11 +90,11 @@ lux publish --log-json
 Topics are published under `{prefix}/inverter_1/{metric}/state`:
 
 ```
-solar_assistant/inverter_1/pv_voltage_1/state     → "350.0"
-solar_assistant/inverter_1/battery_voltage/state  → "53.3"
-solar_assistant/inverter_1/grid_power/state       → "1500"
-solar_assistant/inverter_1/pv_power/state         → "3200"
-solar_assistant/total/battery_state_of_charge/state → "85"
+lux/inverter_1/pv_voltage_1/state     → "350.0"
+lux/inverter_1/battery_voltage/state  → "53.3"
+lux/inverter_1/grid_power/state       → "1500"
+lux/inverter_1/pv_power/state         → "3200"
+lux/total/battery_state_of_charge/state → "85"
 ```
 
 ### Health Check Topics
@@ -101,8 +103,14 @@ Two topics are maintained for health monitoring:
 
 | Topic | Description |
 |-------|-------------|
-| `{prefix}/inverter_1/online/state` | `"true"` when connected, `"false"` on disconnect (MQTT LWT) |
+| `{prefix}/inverter_1/online/state` | `"true"` when connected, `"false"` on disconnect (MQTT LWT); republished on every broker reconnect so a stale retained LWT doesn't stick |
 | `{prefix}/inverter_1/last_seen/state` | RFC3339 timestamp of the last fresh live-data (input register) publish |
+
+### Migrating from Solar Assistant / older lux builds
+
+- **`total/battery_power` sign:** lux publishes charge − discharge, i.e. **positive = charging, negative = discharging**. lux builds before commit 66907bf (2026-10-26) published the opposite sign (discharge − charge). If Home Assistant energy dashboards or utility meters were built on a feed with the other convention, flip the sign in your template sensor or reset the affected long-term statistics, or charge and discharge energy will be swapped.
+- **Default prefix is now `lux`** (was `solar_assistant`). A bare `lux publish` used to write over the Solar Assistant box's own topics on a shared broker. Set `--prefix` / `LUX_PREFIX` explicitly if your HA config expects another prefix.
+- **Renamed mode-flag topics:** register 21 bit 4 (anti-islanding) is now `inverter_1/anti_island_enable` (was mislabeled `generator_peak_shaving`), and bit 6 (grid-on power soft start) is `inverter_1/grid_on_power_soft_start_enable` (was mislabeled `grid_peak_shaving`).
 
 ### Data Integrity
 
@@ -157,7 +165,7 @@ ENV LUX_BROKER=tcp://mqtt:1883
 CMD ["lux", "publish", "--quiet"]
 
 HEALTHCHECK --interval=30s --timeout=5s \
-  CMD mosquitto_sub -h mqtt -t "solar_assistant/inverter_1/online/state" -C 1 | grep -q true
+  CMD mosquitto_sub -h mqtt -t "lux/inverter_1/online/state" -C 1 | grep -q true
 ```
 
 ---
@@ -171,7 +179,8 @@ All flags can be set via environment variables with the `LUX_` prefix. Environme
 | `LUX_HOST` | `--host` | (required) | Inverter/dongle IP address |
 | `LUX_PORT` | `--port` | 8000 | Dongle TCP port |
 | `LUX_BROKER` | `--broker` | (required) | MQTT broker URL |
-| `LUX_PREFIX` | `--prefix` | solar_assistant | MQTT topic prefix |
+| `LUX_PREFIX` | `--prefix` | lux | MQTT topic prefix |
+| `LUX_MQTT_CLIENT_ID` | `--client-id` | lux-publish-&lt;hostname&gt;-&lt;pid&gt; | MQTT client ID |
 | `LUX_MQTT_USER` | `--username` | | MQTT username |
 | `LUX_MQTT_PASS` | `--password` | | MQTT password |
 | `LUX_RETAIN` | `--retain` | true | Use MQTT retain flag |

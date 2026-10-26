@@ -1,6 +1,9 @@
 package lux
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // findMapping returns the mapping for topic on register reg, or nil.
 func findMapping(table map[uint16][]MQTTMapping, reg uint16, topic string) *MQTTMapping {
@@ -172,5 +175,27 @@ func TestStaleDetector(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMasterFlagTopicNames(t *testing.T) {
+	want := map[int]string{
+		0:  "inverter_1/eps_enable",
+		4:  "inverter_1/anti_island_enable",
+		6:  "inverter_1/grid_on_power_soft_start_enable",
+		7:  "inverter_1/grid_charge",
+		10: "inverter_1/forced_discharge",
+		11: "inverter_1/charge_priority",
+		15: "inverter_1/export_to_grid",
+	}
+	for bit, topic := range want {
+		if got := MasterFlagTopics[bit]; got != topic {
+			t.Errorf("MasterFlagTopics[%d] (%s) = %q, want %q", bit, MasterFunctionBits[bit], got, topic)
+		}
+	}
+	for bit, topic := range MasterFlagTopics {
+		if strings.Contains(topic, "peak_shaving") {
+			t.Errorf("bit %d (%s) still published as %q", bit, MasterFunctionBits[bit], topic)
+		}
 	}
 }

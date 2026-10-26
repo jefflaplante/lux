@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -149,5 +150,114 @@ func TestPublisherLogsBadCRCOccasionally(t *testing.T) {
 
 	if n := strings.Count(buf.String(), "bad CRC"); n != 2 {
 		t.Errorf("logged bad CRC %d times, want 2:\n%s", n, buf.String())
+	}
+}
+
+func TestPublisherCountsOnlySuccessfulPublishes(t *testing.T) {
+	f := &fakeMQTT{fail: map[string]error{
+		"lux/inverter_1/pv_voltage_1/state": errors.New("not connected"),
+	}}
+	p := newTestPublisher(f, 3)
+	p.handlePacket(inputFrame(1, 3500, 3600)) // pv_voltage_1 (fails), pv_voltage_2 (ok)
+
+	if p.totalPublished != 1 {
+		t.Errorf("totalPublished = %d, want 1 (failed publish must not count)", p.totalPublished)
+	}
+	if p.publishFailed != 1 {
+		t.Errorf("publishFailed = %d, want 1", p.publishFailed)
+	}
+}
+
+func TestPublisherOnConnectRepublishesOnline(t *testing.T) {
+	tests := []struct {
+		name       string
+		inverterUp bool
+		want       string
+	}{
+		{"inverter connected overrides stale LWT", true, "true"},
+		{"inverter down stays offline", false, "false"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &fakeMQTT{}
+			p := newTestPublisher(f, 3)
+			p.setInverterUp(tt.inverterUp)
+			p.onConnect()
+
+			got, ok := f.last("lux/inverter_1/online/state")
+			if !ok || got != tt.want {
+				t.Fatalf("online after reconnect = %q (published %v), want %q", got, ok, tt.want)
+			}
+			for _, m := range f.msgs {
+				if m.topic == "lux/inverter_1/online/state" && !m.retained {
+					t.Error("online state must be published retained")
+				}
+			}
+		})
+	}
+}
+
+func TestDefaultClientIDUnique(t *testing.T) {
+	a := defaultClientID("pi4", 100)
+	b := defaultClientID("pi4", 101)
+	c := defaultClientID("nas", 100)
+	if a == b || a == c {
+		t.Errorf("client IDs collide: %q %q %q", a, b, c)
+	}
+	if a == "lux-publish" || !strings.HasPrefix(a, "lux-publish-") || !strings.Contains(a, "pi4") {
+		t.Errorf("defaultClientID = %q, want lux-publish-<host>-<pid>", a)
+	}
+}
+
+type fakeCloser struct{ closed int }
+
+func (c *fakeCloser) Close() error { c.closed++; return nil }
+
+func TestShutdownGate(t *testing.T) {
+	t.Run("shutdown closes the active client", func(t *testing.T) {
+		g := newShutdownGate()
+		c := &fakeCloser{}
+		if !g.register(c) {
+			t.Fatal("register refused before shutdown")
+		}
+		g.shutdown()
+		if c.closed != 1 {
+			t.Errorf("active client closed %d times, want 1", c.closed)
+		}
+		select {
+		case <-g.done:
+		default:
+			t.Error("done not closed after shutdown")
+		}
+	})
+	t.Run("client connected after shutdown is refused", func(t *testing.T) {
+		// The race: signal lands while newClient is dialing. The fresh client
+		// must not be adopted (it would block in Listen with nobody to close it).
+		g := newShutdownGate()
+		g.shutdown()
+		if g.register(&fakeCloser{}) {
+			t.Error("register accepted a client after shutdown")
+		}
+	})
+	t.Run("shutdown is idempotent", func(t *testing.T) {
+		g := newShutdownGate()
+		g.shutdown()
+		g.shutdown()
+	})
+	t.Run("unregistered client is not closed by shutdown", func(t *testing.T) {
+		g := newShutdownGate()
+		c := &fakeCloser{}
+		g.register(c)
+		g.unregister()
+		g.shutdown()
+		if c.closed != 0 {
+			t.Errorf("unregistered client closed %d times, want 0", c.closed)
+		}
+	})
+}
+
+func TestPublishDefaultPrefixIsLux(t *testing.T) {
+	if got := publishCmd.Flags().Lookup("prefix").DefValue; got != "lux" {
+		t.Errorf("default --prefix = %q, want \"lux\" (solar_assistant would stomp SA's topics)", got)
 	}
 }

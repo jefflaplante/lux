@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -102,9 +103,10 @@ All flags can be set via environment variables with LUX_ prefix.`,
 
 func init() {
 	publishCmd.Flags().String("broker", "", "MQTT broker URL (env: LUX_BROKER) [required]")
-	publishCmd.Flags().String("prefix", "solar_assistant", "MQTT topic prefix (env: LUX_PREFIX)")
+	publishCmd.Flags().String("prefix", "lux", "MQTT topic prefix (env: LUX_PREFIX)")
 	publishCmd.Flags().String("username", "", "MQTT username (env: LUX_MQTT_USER)")
 	publishCmd.Flags().String("password", "", "MQTT password (env: LUX_MQTT_PASS)")
+	publishCmd.Flags().String("client-id", "", "MQTT client ID; default lux-publish-<hostname>-<pid> (env: LUX_MQTT_CLIENT_ID)")
 	publishCmd.Flags().Bool("retain", true, "use MQTT retain flag (env: LUX_RETAIN)")
 	publishCmd.Flags().Bool("quiet", false, "suppress per-packet logging (env: LUX_QUIET)")
 	publishCmd.Flags().Bool("log-json", false, "output logs as JSON lines (env: LUX_LOG_JSON)")
@@ -116,6 +118,7 @@ func init() {
 	viper.BindPFlag("prefix", publishCmd.Flags().Lookup("prefix"))
 	viper.BindPFlag("mqtt_user", publishCmd.Flags().Lookup("username"))
 	viper.BindPFlag("mqtt_pass", publishCmd.Flags().Lookup("password"))
+	viper.BindPFlag("mqtt_client_id", publishCmd.Flags().Lookup("client-id"))
 	viper.BindPFlag("retain", publishCmd.Flags().Lookup("retain"))
 	viper.BindPFlag("quiet", publishCmd.Flags().Lookup("quiet"))
 	viper.BindPFlag("log_json", publishCmd.Flags().Lookup("log-json"))
@@ -136,17 +139,30 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	quiet := viper.GetBool("quiet")
 	logJSON := viper.GetBool("log_json")
 	staleThreshold := viper.GetInt("stale_threshold")
+	clientID := viper.GetString("mqtt_client_id")
+	if clientID == "" {
+		hostname, _ := os.Hostname()
+		clientID = defaultClientID(hostname, os.Getpid())
+	}
 
 	log := &pubLogger{json: logJSON, quiet: quiet, w: os.Stderr}
 
-	// Connect to MQTT broker (stays connected across inverter reconnects)
-	onlineTopic := prefix + "/inverter_1/online/state"
+	pub := &publisher{
+		prefix: prefix,
+		retain: retain,
+		log:    log,
+		stale:  lux.NewStaleDetector(staleThreshold),
+	}
 
+	// Connect to MQTT broker (stays connected across inverter reconnects).
+	// OnConnect fires on every (re)connect and replaces the retained LWT
+	// "false" the broker published while we were away.
 	opts := mqtt.NewClientOptions().
 		AddBroker(broker).
-		SetClientID("lux-publish").
+		SetClientID(clientID).
 		SetAutoReconnect(true).
-		SetWill(onlineTopic, "false", 1, true)
+		SetWill(pub.onlineTopic(), "false", 1, true).
+		SetOnConnectHandler(func(mqtt.Client) { pub.onConnect() })
 
 	if username != "" {
 		opts.SetUsername(username)
@@ -156,6 +172,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	}
 
 	mqttClient := mqtt.NewClient(opts)
+	pub.mqtt = mqttClient
 	tok := mqttClient.Connect()
 	if !tok.WaitTimeout(10 * time.Second) {
 		return fmt.Errorf("MQTT connect timeout")
@@ -163,47 +180,35 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	if tok.Error() != nil {
 		return fmt.Errorf("MQTT connect: %w", tok.Error())
 	}
-	defer mqttClient.Disconnect(500)
 
 	host := viper.GetString("host")
 	port := viper.GetInt("port")
 
-	log.status(fmt.Sprintf("Connected: inverter=%s:%d broker=%s prefix=%s", host, port, broker, prefix))
+	log.status(fmt.Sprintf("Connected: inverter=%s:%d broker=%s prefix=%s client_id=%s", host, port, broker, prefix, clientID))
 	log.status("Publishing (Ctrl-C to stop)...")
 
-	// Shutdown signal handling
-	shutdownCh := make(chan struct{})
+	// Shutdown signal handling. The handler only closes the active inverter
+	// connection; all MQTT publishing stays on this goroutine.
+	gate := newShutdownGate()
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	// Track active client so signal handler can close it
-	var activeClient *lux.Client
-	var activeClientMu sync.Mutex
-
 	go func() {
 		<-sigCh
 		log.status("Shutting down...")
-		mqttClient.Publish(onlineTopic, 1, true, "false")
-
-		// Close active client to unblock Listen()
-		activeClientMu.Lock()
-		if activeClient != nil {
-			activeClient.Close()
-		}
-		activeClientMu.Unlock()
-
-		close(shutdownCh)
-
 		// Restore default signal handling - second Ctrl-C will force exit
 		signal.Reset(syscall.SIGINT, syscall.SIGTERM)
+		gate.shutdown()
 	}()
 
-	pub := &publisher{
-		mqtt:   mqttClient,
-		prefix: prefix,
-		retain: retain,
-		log:    log,
-		stale:  lux.NewStaleDetector(staleThreshold),
+	// finish runs once Listen has returned, so no packet callback is in
+	// flight: publish the final offline state, wait for it, then let paho
+	// drain in-flight messages and disconnect.
+	finish := func() error {
+		pub.setInverterUp(false)
+		pub.publishOnline()
+		mqttClient.Disconnect(250)
+		log.status(fmt.Sprintf("Done. %d total publishes.", pub.totalPublished))
+		return nil
 	}
 
 	// Reconnect loop with exponential backoff
@@ -213,22 +218,21 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	for {
 		// Check shutdown before connecting
 		select {
-		case <-shutdownCh:
-			log.status(fmt.Sprintf("Done. %d total publishes.", pub.totalPublished))
-			return nil
+		case <-gate.done:
+			return finish()
 		default:
 		}
 
 		client, err := newClient(cmd)
 		if err != nil {
 			log.errorf("inverter connect failed", err)
-			mqttClient.Publish(onlineTopic, 1, true, "false")
+			pub.setInverterUp(false)
+			pub.publishOnline()
 			log.status(fmt.Sprintf("Retrying in %v...", backoff))
 
 			select {
-			case <-shutdownCh:
-				log.status(fmt.Sprintf("Done. %d total publishes.", pub.totalPublished))
-				return nil
+			case <-gate.done:
+				return finish()
 			case <-time.After(backoff):
 			}
 
@@ -236,48 +240,107 @@ func runPublish(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Register client so signal handler can close it
-		activeClientMu.Lock()
-		activeClient = client
-		activeClientMu.Unlock()
+		// Adopt the client unless a signal arrived while we were dialing
+		if !gate.register(client) {
+			client.Close()
+			return finish()
+		}
 
 		// Connected - reset backoff
 		backoff = 1 * time.Second
-		mqttClient.Publish(onlineTopic, 1, true, "true")
+		pub.setInverterUp(true)
+		pub.publishOnline()
 
 		listenErr := client.Listen(func(pkt *lux.Packet) {
 			pub.noteBadCRC(client.DroppedBadCRC())
 			if pkt.TCPFunction == lux.FuncHeartbeat {
-				mqttClient.Publish(onlineTopic, 1, true, "true")
+				pub.publishOnline()
 				return
 			}
 			pub.handlePacket(pkt)
 		})
 
-		// Clear active client before closing to prevent double-close
-		activeClientMu.Lock()
-		activeClient = nil
-		activeClientMu.Unlock()
+		gate.unregister()
 		client.Close()
+		pub.setInverterUp(false)
 
 		// Check if this was a shutdown
 		select {
-		case <-shutdownCh:
-			log.status(fmt.Sprintf("Done. %d total publishes.", pub.totalPublished))
-			return nil
+		case <-gate.done:
+			return finish()
 		default:
 		}
 
 		if listenErr != nil {
 			log.errorf("inverter connection lost", listenErr)
-			mqttClient.Publish(onlineTopic, 1, true, "false")
+			pub.publishOnline()
 			log.status("Reconnecting...")
 		}
 	}
 }
 
+// defaultClientID returns a per-process MQTT client ID. A fixed ID made two
+// publishers kick each other off the broker in a reconnect loop.
+func defaultClientID(hostname string, pid int) string {
+	if hostname == "" {
+		hostname = "unknown"
+	}
+	return fmt.Sprintf("lux-publish-%s-%d", hostname, pid)
+}
+
+// shutdownGate serializes adopting a new inverter connection with shutdown,
+// so a signal that lands while dialing can't leave a fresh connection
+// blocked in Listen with nobody left to close it.
+type shutdownGate struct {
+	mu      sync.Mutex
+	closing bool
+	active  io.Closer
+	done    chan struct{}
+}
+
+func newShutdownGate() *shutdownGate {
+	return &shutdownGate{done: make(chan struct{})}
+}
+
+// register makes c the active connection. It returns false if shutdown has
+// begun, in which case the caller must close c itself.
+func (g *shutdownGate) register(c io.Closer) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closing {
+		return false
+	}
+	g.active = c
+	return true
+}
+
+// unregister clears the active connection.
+func (g *shutdownGate) unregister() {
+	g.mu.Lock()
+	g.active = nil
+	g.mu.Unlock()
+}
+
+// shutdown closes the active connection (unblocking Listen) and closes done.
+// Safe to call more than once.
+func (g *shutdownGate) shutdown() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closing {
+		return
+	}
+	g.closing = true
+	if g.active != nil {
+		g.active.Close()
+	}
+	close(g.done)
+}
+
 // dropLogInterval rate-limits repeated data-integrity warnings.
 const dropLogInterval = time.Minute
+
+// publishTimeout bounds how long a single publish token is awaited.
+const publishTimeout = 5 * time.Second
 
 // mqttPublisher is the subset of mqtt.Client the publisher uses.
 type mqttPublisher interface {
@@ -298,6 +361,58 @@ type publisher struct {
 	lastStaleLog   time.Time
 	badCRC         uint64
 	lastCRCLog     time.Time
+
+	inverterUp atomic.Bool // inverter connection state, for online/state
+
+	// Publish failures; guarded by failMu since onConnect runs on paho's goroutine.
+	failMu        sync.Mutex
+	publishFailed uint64
+	lastFailLog   time.Time
+}
+
+func (p *publisher) onlineTopic() string { return p.prefix + "/inverter_1/online/state" }
+
+// setInverterUp records whether the inverter connection is live.
+func (p *publisher) setInverterUp(up bool) { p.inverterUp.Store(up) }
+
+// publishOnline publishes the current inverter state to online/state,
+// retained at QoS 1, and reports whether the broker accepted it.
+func (p *publisher) publishOnline() bool {
+	val := "false"
+	if p.inverterUp.Load() {
+		val = "true"
+	}
+	topic := p.onlineTopic()
+	return p.await(p.mqtt.Publish(topic, 1, true, val), topic)
+}
+
+// onConnect runs on every MQTT (re)connect. After an unclean disconnect the
+// broker holds our retained LWT "false"; republish the real state.
+func (p *publisher) onConnect() {
+	p.publishOnline()
+}
+
+// await waits for a publish token and reports success. Failures and
+// timeouts are counted and logged at most once per dropLogInterval.
+func (p *publisher) await(tok mqtt.Token, topic string) bool {
+	var err error
+	if !tok.WaitTimeout(publishTimeout) {
+		err = fmt.Errorf("timed out after %v", publishTimeout)
+	} else {
+		err = tok.Error()
+	}
+	if err == nil {
+		return true
+	}
+	p.failMu.Lock()
+	defer p.failMu.Unlock()
+	p.publishFailed++
+	if p.occasionally(&p.lastFailLog) {
+		p.log.warn("MQTT publish failed", map[string]any{
+			"topic": topic, "error": err.Error(), "failed_total": p.publishFailed,
+		})
+	}
+	return false
 }
 
 func (p *publisher) clock() time.Time {
@@ -353,10 +468,14 @@ func (p *publisher) handlePacket(pkt *lux.Packet) {
 		return
 	}
 
-	packetPublished := 0
+	type pending struct {
+		tok   mqtt.Token
+		topic string
+	}
+	var sent []pending
 	send := func(topic, val string) {
-		p.mqtt.Publish(p.prefix+"/"+topic+"/state", 0, p.retain, val)
-		packetPublished++
+		full := p.prefix + "/" + topic + "/state"
+		sent = append(sent, pending{p.mqtt.Publish(full, 0, p.retain, val), full})
 	}
 
 	// Individual register topics
@@ -394,10 +513,18 @@ func (p *publisher) handlePacket(pkt *lux.Packet) {
 		}
 	}
 
+	// Count only publishes the client actually accepted
+	packetPublished := 0
+	for _, s := range sent {
+		if p.await(s.tok, s.topic) {
+			packetPublished++
+		}
+	}
 	p.totalPublished += packetPublished
 
 	if pkt.RegisterType == "input" && packetPublished > 0 {
-		p.mqtt.Publish(p.prefix+"/inverter_1/last_seen/state", 0, true, p.clock().UTC().Format(time.RFC3339))
+		topic := p.prefix + "/inverter_1/last_seen/state"
+		p.await(p.mqtt.Publish(topic, 0, true, p.clock().UTC().Format(time.RFC3339)), topic)
 	}
 
 	p.log.info("published", map[string]any{
