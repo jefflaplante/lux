@@ -15,6 +15,11 @@ import (
 // Commands return it (wrapped) so the process exits nonzero.
 var errVerifyFailed = errors.New("read-back verification failed")
 
+// errDeclined marks a write the user (or a closed stdin under --json)
+// declined at the confirmation prompt. Commands return it so the process
+// exits nonzero: automation must not read "Cancelled." + exit 0 as success.
+var errDeclined = errors.New("write cancelled at confirmation prompt")
+
 // regWrite is a single holding register write with a display description.
 type regWrite struct {
 	reg  uint16
@@ -105,4 +110,13 @@ func checkProtectionChange(current, newVal uint16, allow bool) (string, error) {
 	}
 	return fmt.Sprintf("!!! WARNING: DISABLING INVERTER PROTECTION: %s !!!\n"+
 		"!!! This can violate grid interconnection requirements and create a safety hazard. !!!", names), nil
+}
+
+// confirmWrite asks for approval and maps a declined confirmation to
+// errDeclined so callers can exit nonzero.
+func confirmWrite(cmd *cobra.Command, yes, jsonOut bool, prompt string) error {
+	if confirm(cmd, yes, jsonOut, prompt) {
+		return nil
+	}
+	return errDeclined
 }

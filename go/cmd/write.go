@@ -135,8 +135,8 @@ func runWrite(cmd *cobra.Command, args []string) error {
 		fmt.Printf("New:      %s (raw: %d)\n", formatRegValue("holding", target.regNum, newVal), newVal)
 	}
 
-	if !confirm(cmd, yes, jsonFlag, "Confirm write? [y/N] ") {
-		return nil
+	if err := confirmWrite(cmd, yes, jsonFlag, "Confirm write? [y/N] "); err != nil {
+		return err
 	}
 
 	// Reconnect; write and verify on the same connection

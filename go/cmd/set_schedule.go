@@ -151,8 +151,8 @@ func runSetSchedule(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 
-	if !confirm(cmd, yes, jsonFlag, "Confirm? [y/N] ") {
-		return nil
+	if err := confirmWrite(cmd, yes, jsonFlag, "Confirm? [y/N] "); err != nil {
+		return err
 	}
 
 	// Reconnect; write and verify on the same connection

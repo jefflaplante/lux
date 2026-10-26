@@ -69,7 +69,7 @@ func newTestPublisher(f *fakeMQTT, staleThreshold int) *publisher {
 		prefix: "lux",
 		retain: true,
 		log:    &pubLogger{quiet: true, w: io.Discard},
-		stale:  lux.NewStaleDetector(staleThreshold),
+		stale:  lux.NewStaleDetector(staleThreshold, lux.WatchedInputRegisters()),
 	}
 }
 
@@ -150,6 +150,27 @@ func TestPublisherLogsBadCRCOccasionally(t *testing.T) {
 
 	if n := strings.Count(buf.String(), "bad CRC"); n != 2 {
 		t.Errorf("logged bad CRC %d times, want 2:\n%s", n, buf.String())
+	}
+}
+
+func TestNoteBadCRCRebasesOnReconnect(t *testing.T) {
+	var buf strings.Builder
+	p := newTestPublisher(&fakeMQTT{}, 3)
+	p.log = &pubLogger{w: &buf}
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	p.now = func() time.Time { return now }
+
+	p.noteBadCRC(4) // connection 1: logs 4 drops
+	now = now.Add(2 * dropLogInterval)
+	p.noteBadCRC(2) // reconnect: counter restarted lower -> rebase, no log
+	now = now.Add(2 * dropLogInterval)
+	p.noteBadCRC(7) // connection 2 growth: must log (5 new), not be suppressed
+
+	if n := strings.Count(buf.String(), "bad CRC"); n != 2 {
+		t.Errorf("logged bad CRC %d times, want 2 (reconnect must reset baseline):\n%s", n, buf.String())
+	}
+	if !strings.Contains(buf.String(), "new:5") {
+		t.Errorf("second log should report 5 new drops, got:\n%s", buf.String())
 	}
 }
 
@@ -259,5 +280,20 @@ func TestShutdownGate(t *testing.T) {
 func TestPublishDefaultPrefixIsLux(t *testing.T) {
 	if got := publishCmd.Flags().Lookup("prefix").DefValue; got != "lux" {
 		t.Errorf("default --prefix = %q, want \"lux\" (solar_assistant would stomp SA's topics)", got)
+	}
+}
+
+func TestPublisherDoesNotStaleDropUnwatchedBlocks(t *testing.T) {
+	f := &fakeMQTT{}
+	p := newTestPublisher(f, 3)
+	// Register 5 has no topic mapping: even endless identical frames must not
+	// be classified stale (nothing publishes from it, and a real block 40-79
+	// poll shares nothing with it).
+	for i := 0; i < 6; i++ {
+		p.stale.Observe(inputFrame(5, 777))
+	}
+	p.handlePacket(inputFrame(5, 777))
+	if p.staleSkipped != 0 {
+		t.Errorf("staleSkipped = %d, want 0 (unwatched block cannot be stale)", p.staleSkipped)
 	}
 }

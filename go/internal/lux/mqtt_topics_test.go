@@ -147,6 +147,10 @@ func TestStaleDetector(t *testing.T) {
 		return p
 	}
 
+	// Watched set mirrors a slice of real InputMQTTTopics keys (0 device_mode,
+	// 7 pv_power_1) plus unwatched registers 5, 6, 40.
+	watched := map[uint16]bool{0: true, 7: true}
+
 	tests := []struct {
 		name      string
 		threshold int
@@ -168,16 +172,32 @@ func TestStaleDetector(t *testing.T) {
 			[]bool{false, false, false, false, true}},
 		{"threshold below 2 disables", 1,
 			[]*Packet{in(0, 5), in(0, 5), in(0, 5)}, []bool{false, false, false}},
+		{"unwatched registers never stale", 3,
+			[]*Packet{in(5, 9), in(5, 9), in(5, 9), in(6, 9), in(6, 9), in(6, 9)}, []bool{false, false, false, false, false, false}},
+		{"block is stale if any register is watched", 2,
+			[]*Packet{in(6, 9, 9), in(6, 9, 9), in(6, 9, 9)}, []bool{false, true, true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := NewStaleDetector(tt.threshold)
+			d := NewStaleDetector(tt.threshold, watched)
 			for i, f := range tt.frames {
 				if got := d.Observe(f); got != tt.want[i] {
 					t.Errorf("frame %d: Observe = %v, want %v", i, got, tt.want[i])
 				}
 			}
 		})
+	}
+}
+
+func TestWatchedInputRegistersMirrorsTopicMap(t *testing.T) {
+	w := WatchedInputRegisters()
+	if len(w) != len(InputMQTTTopics) {
+		t.Fatalf("WatchedInputRegisters has %d regs, InputMQTTTopics has %d", len(w), len(InputMQTTTopics))
+	}
+	for r := range InputMQTTTopics {
+		if !w[r] {
+			t.Errorf("register %d is mapped but not watched", r)
+		}
 	}
 }
 

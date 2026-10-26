@@ -151,7 +151,7 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		prefix: prefix,
 		retain: retain,
 		log:    log,
-		stale:  lux.NewStaleDetector(staleThreshold),
+		stale:  lux.NewStaleDetector(staleThreshold, lux.WatchedInputRegisters()),
 	}
 
 	// Connect to MQTT broker (stays connected across inverter reconnects).
@@ -359,7 +359,7 @@ type publisher struct {
 	totalPublished int
 	staleSkipped   uint64
 	lastStaleLog   time.Time
-	badCRC         uint64
+	badCRCBase     uint64 // bad-CRC total already logged for this connection
 	lastCRCLog     time.Time
 
 	inverterUp atomic.Bool // inverter connection state, for online/state
@@ -432,15 +432,21 @@ func (p *publisher) occasionally(last *time.Time) bool {
 	return false
 }
 
-// noteBadCRC records the client's running bad-CRC drop count and logs when it
-// has grown, at most once per dropLogInterval.
+// noteBadCRC logs growth in the client's bad-CRC drop count, at most once per
+// dropLogInterval. total comes from the current connection's client; each new
+// Client starts its counter at zero, so a decrease is a reconnect, not a
+// regression — rebase instead of suppressing forever.
 func (p *publisher) noteBadCRC(total uint64) {
-	if total <= p.badCRC {
+	if total < p.badCRCBase {
+		p.badCRCBase = total
+		return
+	}
+	if total == p.badCRCBase {
 		return
 	}
 	if p.occasionally(&p.lastCRCLog) {
-		p.log.warn("dropped frames with bad CRC", map[string]any{"total": total, "new": total - p.badCRC})
-		p.badCRC = total
+		p.log.warn("dropped frames with bad CRC", map[string]any{"new": total - p.badCRCBase})
+		p.badCRCBase = total
 	}
 }
 

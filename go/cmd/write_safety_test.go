@@ -216,3 +216,38 @@ func TestVerifyWrites(t *testing.T) {
 		})
 	}
 }
+
+func TestConfirmWriteDeclinedReturnsErrDeclined(t *testing.T) {
+	cases := []struct {
+		name  string
+		yes   bool
+		input string
+	}{
+		{"interactive decline", false, "n\n"},
+		{"EOF under --json declines", false, ""},
+		{"empty line declines", false, "\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			c := &cobra.Command{}
+			c.SetIn(strings.NewReader(tc.input))
+			c.SetOut(&stdout)
+			c.SetErr(&stderr)
+			err := confirmWrite(c, tc.yes, true, "Confirm? [y/N] ")
+			if !errors.Is(err, errDeclined) {
+				t.Fatalf("confirmWrite() error = %v, want errDeclined", err)
+			}
+			if tc.yes && err == nil {
+				t.Error("--yes must not decline")
+			}
+		})
+	}
+	c := &cobra.Command{}
+	c.SetIn(strings.NewReader("y\n"))
+	c.SetOut(&bytes.Buffer{})
+	c.SetErr(&bytes.Buffer{})
+	if err := confirmWrite(c, false, false, "Confirm? [y/N] "); err != nil {
+		t.Errorf("accepted confirmation returned %v, want nil", err)
+	}
+}

@@ -146,8 +146,8 @@ func runSetMode(cmd *cobra.Command, args []string) error {
 		fmt.Printf("New:     %s (raw: %d)\n", def.FormatValueOnly(newVal), newVal)
 	}
 
-	if !confirm(cmd, yes, jsonFlag, "Confirm? [y/N] ") {
-		return nil
+	if err := confirmWrite(cmd, yes, jsonFlag, "Confirm? [y/N] "); err != nil {
+		return err
 	}
 
 	// Reconnect; re-read, write and verify all on this one connection

@@ -20,6 +20,17 @@ The library handles the LuxPower wire protocol (TCP framing around Modbus RTU). 
 
 **Phase: Research & Design** — protocol fully reverse-engineered from lxp-bridge source.
 
+### Breaking changes
+
+- **`lux write` / `set-mode` / `set-schedule`: a declined or non-interactive
+  confirmation now exits nonzero** (`cancelled at confirmation prompt`).
+  Previously `--json` with a closed stdin printed `Cancelled.` and exited 0,
+  so automation could not distinguish a skipped write from a successful one.
+  Scripts that rely on exit 0 must pass `--yes` explicitly.
+- **The frozen-frame detector only observes input registers that feed a
+  published topic.** Blocks with no topic mapping are exempt by definition.
+  (`--stale-threshold 0` still disables the detector entirely.)
+
 ## Key Documents
 
 - `PROTOCOL.md` — Full wire protocol specification
