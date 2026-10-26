@@ -205,8 +205,22 @@ func (p *Packet) decodeTranslatedPayload(data []byte) {
 	}
 }
 
+// MaxFrameLen caps the header's frame-length field (bytes after offset 6)
+// that FindPackets will believe. Our own reads are 40 registers (frame length
+// 111, 117 bytes total), but a Modbus read may request up to 127 registers
+// (35 + 254 + 2 = 291 bytes total) and other clients of the dongle may do so,
+// so the cap leaves headroom for that while bounding how long a stray
+// 0xa1 0x1a can stall the framer to ~0.5KB instead of 64KB.
+const MaxFrameLen = 512
+
 // FindPackets scans a byte buffer for complete LuxPower TCP frames.
 // Returns decoded packets and the number of bytes consumed.
+//
+// A header whose frame length exceeds MaxFrameLen, or whose bytes do not
+// decode as a frame with a known TCP function, is treated as a false sync:
+// the scan advances one byte so real frames inside the bogus span are still
+// found. Register frames with a bad CRC are still returned (callers drop and
+// count them) but are resynced the same way rather than skipped whole.
 func FindPackets(buf []byte) ([]*Packet, int) {
 	var packets []*Packet
 	consumed := 0
@@ -219,18 +233,41 @@ func FindPackets(buf []byte) ([]*Packet, int) {
 			continue
 		}
 		frameLen := int(binary.LittleEndian.Uint16(buf[pos+4 : pos+6]))
+		if frameLen > MaxFrameLen {
+			pos++
+			consumed = pos
+			continue
+		}
 		totalLen := 6 + frameLen
 		if pos+totalLen > len(buf) {
 			break // incomplete packet
 		}
-		if pkt := Decode(buf[pos : pos+totalLen]); pkt != nil {
-			packets = append(packets, pkt)
+		pkt := Decode(buf[pos : pos+totalLen])
+		if pkt == nil || !knownFunction(pkt.TCPFunction) {
+			pos++
+			consumed = pos
+			continue
+		}
+		packets = append(packets, pkt)
+		if (pkt.RegisterType == "holding" || pkt.RegisterType == "input") && !pkt.CRCValid {
+			pos++
+			consumed = pos
+			continue
 		}
 		pos += totalLen
 		consumed = pos
 	}
 
 	return packets, consumed
+}
+
+// knownFunction reports whether fn is one of the defined TCP function codes.
+func knownFunction(fn byte) bool {
+	switch fn {
+	case FuncHeartbeat, FuncTranslatedData, FuncReadParam, FuncWriteParam:
+		return true
+	}
+	return false
 }
 
 // serialToBytes converts a serial string to a fixed 10-byte array.

@@ -662,6 +662,59 @@ func TestFindPacketsSingle(t *testing.T) {
 	}
 }
 
+func TestFindPacketsStrayHeaderLargeLength(t *testing.T) {
+	// A stray 0xa1 0x1a followed by a huge LE length must not make the
+	// framer wait for 64KB and swallow the real frame behind it.
+	vals := make([]uint16, 40)
+	for i := range vals {
+		vals[i] = uint16(1000 + i)
+	}
+	real := buildResponsePacket(ModbusReadInput, 0, vals)
+	buf := append([]byte{0xa1, 0x1a, 0xff, 0xff}, real...)
+
+	packets, consumed := FindPackets(buf)
+	if len(packets) != 1 {
+		t.Fatalf("FindPackets found %d packets, want 1", len(packets))
+	}
+	pkt := packets[0]
+	if pkt.RegisterType != "input" || pkt.StartRegister != 0 || pkt.RegisterCount != 40 {
+		t.Errorf("got %s start=%d count=%d, want input start=0 count=40",
+			pkt.RegisterType, pkt.StartRegister, pkt.RegisterCount)
+	}
+	if !pkt.CRCValid {
+		t.Error("CRCValid = false, want true")
+	}
+	for i, want := range vals {
+		if got := pkt.Registers[uint16(i)]; got != want {
+			t.Errorf("Registers[%d] = %d, want %d", i, got, want)
+		}
+	}
+	if consumed != len(buf) {
+		t.Errorf("consumed = %d, want %d", consumed, len(buf))
+	}
+}
+
+func TestFindPacketsStrayHeaderPlausibleLength(t *testing.T) {
+	// A stray header whose (plausible) length spans exactly over a real frame
+	// does not decode as a valid frame, so the framer must resync into it.
+	real := buildResponsePacket(ModbusReadHolding, 21, []uint16{0xABCD, 0x1111})
+	stray := []byte{0xa1, 0x1a, 0, 0}
+	binary.LittleEndian.PutUint16(stray[2:4], uint16(len(stray)+len(real)-6))
+	buf := append(stray, real...)
+
+	packets, consumed := FindPackets(buf)
+	if len(packets) != 1 {
+		t.Fatalf("FindPackets found %d packets, want 1", len(packets))
+	}
+	if p := packets[0]; p.RegisterType != "holding" || p.StartRegister != 21 || !p.CRCValid ||
+		p.Registers[21] != 0xABCD || p.Registers[22] != 0x1111 {
+		t.Errorf("decoded %+v, want holding h21=0xABCD h22=0x1111 with valid CRC", p)
+	}
+	if consumed != len(buf) {
+		t.Errorf("consumed = %d, want %d", consumed, len(buf))
+	}
+}
+
 func TestDecodeHeartbeatShort(t *testing.T) {
 	// Heartbeat with exactly 8 bytes (too short for datalog)
 	pkt := make([]byte, 8)
