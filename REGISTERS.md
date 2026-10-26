@@ -2,6 +2,17 @@
 
 *Source: lxp-bridge `LXP_REGISTERS.txt` + packet.rs Register enum + community research*
 
+> **✅ Validated 2026-10-26** via 2.3 h paired capture (live Modbus reads + Solar Assistant MQTT,
+> lag-aligned correlation, r ≥ 0.94, residual ≤ 3%): PV i1–i3 / i7–i9, battery i4 / i5 / i10,
+> grid i12 / i15 / **i27**, inverter i16, EPS output i20. The former i23/i24 "grid power pair" and
+> i25–i27 "PV energy" rows below were **wrong for this firmware** — the device names grid import
+> as i27 "Power From Grid" (r=0.995 vs SA `grid_power`), and PV energy-today lives at i28–i30.
+> Methodology and full topic→register map: [CORRELATION.md](CORRELATION.md).
+
+> **⚠️ Dongle quirk:** ~12% of ReadInputAll polls (42/348) returned a *frozen cache frame* —
+> an identical register tuple repeated for 1.5 h (e.g. i24=300, i25=2200, i26=2520) inconsistent
+> with live neighbors (i16=1 W at the same moments). Discard non-varying repeats before correlation or averaging.
+
 ---
 
 ## Holding Registers (Read/Write via DeviceFunction 3/6/16)
@@ -179,15 +190,18 @@ Live data from the inverter. Read in blocks of 40 registers:
 | 15 | f_ac | ÷100 | Hz | Grid frequency |
 | 16 | p_inv | - | W | Inverter power |
 | 17 | p_rec | - | W | Rectifier power |
-| 23 | p_to_grid | - | W | Power exporting to grid |
-| 24 | p_to_user | - | W | Power importing from grid |
-| 25 | e_pv_day_1 | ÷10 | kWh | PV gen today, string 1 |
-| 26 | e_pv_day_2 | ÷10 | kWh | PV gen today, string 2 |
-| 27 | e_pv_day_3 | ÷10 | kWh | PV gen today, string 3 |
-| 30 | e_chg_day | ÷10 | kWh | Battery charge today |
-| 31 | e_dischg_day | ÷10 | kWh | Battery discharge today |
-| 33 | e_to_grid_day | ÷10 | kWh | Grid export today |
-| 34 | e_to_user_day | ÷10 | kWh | Grid import today |
+| 23 | eps_freq | ÷100 | Hz | EPS output frequency — equals grid freq when grid-tied (r=1.000 vs i15) |
+| 24 | p_eps | - | W | EPS active power (0 when grid-tied; see frozen-frame note below) |
+| 25 | s_eps | - | VA | EPS apparent power (0 when grid-tied) |
+| 26 | p_to_grid | - | W | Power exporting to grid — device name "Power To Grid" (0 during capture; no feed-in observed) |
+| 27 | p_from_grid | - | W | **Power importing from grid — correlation-verified** (r=0.995 vs SA grid_power, resid 1.2%) |
+| 28 | e_pv_day_1 | ÷10 | kWh | PV gen today, string 1 |
+| 29 | e_pv_day_2 | ÷10 | kWh | PV gen today, string 2 |
+| 30 | e_pv_day_3 | ÷10 | kWh | PV gen today, string 3 |
+| 33 | e_chg_day | ÷10 | kWh | Battery charge today |
+| 34 | e_dischg_day | ÷10 | kWh | Battery discharge today |
+| 36 | e_to_grid_day | ÷10 | kWh | Grid export today |
+| 37 | e_to_user_day | ÷10 | kWh | Grid import today |
 
 ### Inverter Status Codes
 
