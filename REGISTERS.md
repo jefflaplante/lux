@@ -133,11 +133,13 @@ These are the configuration registers. Read with ReadHold (3), write with WriteS
 | 144 | FLOATING_VOLTAGE | Battery floating voltage | RW |
 | 147 | BATTERY_CAPACITY | Battery capacity (Ah) | RW |
 | 148 | NOMINAL_BATTERY_VOLTAGE | Nominal battery voltage | RW |
+| 158 | (shutdown voltage) | Battery shutdown / stop-discharge voltage, ÷10 V (raw 400 = 40.0 V; SA `shutdown_battery_voltage`, `stop_discharge_voltage`) | RW |
+| 159 | (charge stop voltage) | Grid charge stop voltage, ÷10 V (raw 590 = 59.0 V; SA `grid_charge_stop_voltage`) | RW |
 | 160 | **AC_CHARGE_START_SOC** | **SOC to begin AC charging (%)** | RW |
 | 161 | **AC_CHARGE_END_SOC** | **SOC to stop AC charging (%)** | RW |
 | 162 | BATTERY_WARNING_VOLTAGE | Battery warning voltage | RW |
 | 164 | BATTERY_WARNING_SOC | Battery warning SOC (%) | RW |
-| 166 | BAT_LOW_TO_UTILITY_VOLT | Switch to grid voltage | RW |
+| 166 | BAT_LOW_TO_UTILITY_VOLT | Switch to grid voltage (reads 0 on this install; **not** SA shutdown voltage — see 158) | RW |
 | 167 | BAT_LOW_TO_UTILITY_SOC | Switch to grid SOC (%) | RW |
 | 168 | AC_CHARGE_BATTERY_CURRENT | AC charge current limit (A) | RW |
 | 169 | ON_GRID_EOD_VOLTAGE | On-grid end-of-discharge voltage | RW |
@@ -190,6 +192,7 @@ Live data from the inverter. Read in blocks of 40 registers:
 | 15 | f_ac | ÷100 | Hz | Grid frequency |
 | 16 | p_inv | - | W | Inverter power |
 | 17 | p_rec | - | W | Rectifier power |
+| 20 | v_eps_r | ÷10 | V | EPS output voltage (phase R) — SA `ac_output_voltage` (r=0.93, resid 0.1%) |
 | 23 | eps_freq | ÷100 | Hz | EPS output frequency — equals grid freq when grid-tied (r=1.000 vs i15) |
 | 24 | p_eps | - | W | EPS active power (0 when grid-tied; see frozen-frame note below) |
 | 25 | s_eps | - | VA | EPS apparent power (0 when grid-tied) |
@@ -202,6 +205,8 @@ Live data from the inverter. Read in blocks of 40 registers:
 | 34 | e_dischg_day | ÷10 | kWh | Battery discharge today |
 | 36 | e_to_grid_day | ÷10 | kWh | Grid export today |
 | 37 | e_to_user_day | ÷10 | kWh | Grid import today |
+| 65 | t_radiator_1 | - | °C | Heat-sink temperature — SA `temperature` reports it in °F (raw×1.8+32; 42 °C → 107.6 °F) |
+| 67 | t_bat | ÷10 | °F | Battery temperature (°F×10; raw 885 = 88.5 °F) — see SA note below |
 
 ### Inverter Status Codes
 
@@ -213,12 +218,24 @@ Live data from the inverter. Read in blocks of 40 registers:
 | 0x0C | PV Charge On-grid |
 | 0x10 | Battery On-grid |
 | 0x11 | Bypass |
+| 0x12 | (unnamed; SA reports "Solar/Grid", observed evening 2026-10-26) |
 | 0x14 | PV & Battery On-grid |
 | 0x20 | AC Charge |
 | 0x28 | PV & AC Charge |
 | 0x40 | Battery Off-grid |
 | 0x80 | PV Off-grid |
 | 0xC0 | PV & Battery Off-grid |
+
+The MQTT publisher's `device_mode` topic uses Solar Assistant's strings for codes
+observed live (0x0C → "Solar/Battery", 0x12 → "Solar/Grid") and falls back to this table.
+
+### Solar Assistant parity notes (MQTT publisher)
+
+- `total/battery_power` = i10 − i11: **positive = charging**, negative = discharging (SA sign convention).
+- `inverter_1/load_power` = i16 + i27 − i26 (inverter output + net grid import = house load).
+- `total/battery_temperature`: SA publishes a constant 242.6 on this install, which matches a
+  PV string voltage raw value (2426), i.e. a corrupt/misaligned aggregate. lux intentionally
+  publishes the real sensor (i67 ÷10, °F) instead of chasing parity.
 
 ---
 

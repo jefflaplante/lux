@@ -38,6 +38,13 @@ Derived (no native register): `pv_current_n = pv_power_n / pv_voltage_n`,
 `battery_current = battery_power / battery_voltage` — k-fits for the current topics
 collapse to the voltage/scale ratio, confirming derivation, not measurement.
 
+**Correction (2026-10-26 evening):** the `load_power` / `load_power_non-essential` → i27
+row above (and finding 2 below, "non-essential ≡ i27") was an artifact of the
+passthrough window, when i16 ≈ 0. A live A/B check disproved it: SA `load_power` =
+i16 + i27 − i26 (house load) and `load_power_non-essential` = −i16 + i27 (derived, not
+register-backed). Likewise `shutdown_battery_voltage` / `stop_discharge_voltage` (40.0 V)
+and `grid_charge_stop_voltage` (59.0 V) are holding 158 / 159 ÷10, not "i81/i82 × 0.01".
+
 ## Constant-matched
 
 | SA topic | Register |
