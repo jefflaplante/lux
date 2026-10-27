@@ -81,6 +81,8 @@ LUX_MQTT_CLIENT_ID=            # default lux-publish-<hostname>-<pid>
 LUX_STALE_THRESHOLD=3          # identical input frames before a block is treated as frozen
 LUX_RETAIN=true
 LUX_QUIET=false
+LUX_HA_DISCOVERY=false         # publish HA discovery configs (battery_energy_in/out) on connect
+LUX_HA_DISCOVERY_PREFIX=homeassistant
 ```
 
 ---

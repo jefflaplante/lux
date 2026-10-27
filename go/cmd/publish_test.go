@@ -22,6 +22,7 @@ func (t fakeToken) Error() error                   { return t.err }
 
 type pubMsg struct {
 	topic    string
+	qos      byte
 	retained bool
 	payload  string
 }
@@ -36,7 +37,7 @@ type fakeMQTT struct {
 func (f *fakeMQTT) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.msgs = append(f.msgs, pubMsg{topic, retained, payload.(string)})
+	f.msgs = append(f.msgs, pubMsg{topic, qos, retained, payload.(string)})
 	return fakeToken{f.fail[topic]}
 }
 

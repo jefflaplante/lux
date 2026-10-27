@@ -97,6 +97,14 @@ Data integrity: frames failing CRC are dropped, and an input block repeated
 identically --stale-threshold times in a row is treated as a frozen dongle
 cache — not published and not counted toward last_seen.
 
+Home Assistant discovery (off by default): --ha-discovery publishes retained
+QoS 1 sensor configs for battery_energy_in/out on every broker (re)connect to
+{discovery-prefix}/sensor/lux/{metric}/config, so HA picks them up without
+YAML. unique_id (lux_{metric}) and the config topic are fixed — independent of
+--prefix — so HA entity identity is stable; state_topic follows --prefix.
+--ha-discovery-prefix sets {discovery-prefix} (default "homeassistant"; must
+match HA's MQTT discovery prefix).
+
 All flags can be set via environment variables with LUX_ prefix.`,
 	RunE: runPublish,
 }
@@ -112,6 +120,9 @@ func init() {
 	publishCmd.Flags().Bool("log-json", false, "output logs as JSON lines (env: LUX_LOG_JSON)")
 	publishCmd.Flags().Int("stale-threshold", lux.DefaultStaleThreshold,
 		"consecutive identical input frames treated as a frozen dongle cache; <2 disables (env: LUX_STALE_THRESHOLD)")
+	publishCmd.Flags().Bool("ha-discovery", false, "publish Home Assistant MQTT discovery configs on connect (env: LUX_HA_DISCOVERY)")
+	publishCmd.Flags().String("ha-discovery-prefix", haDefaultDiscoveryPrefix,
+		"Home Assistant MQTT discovery prefix (env: LUX_HA_DISCOVERY_PREFIX)")
 
 	// Bind to viper for env var support
 	viper.BindPFlag("broker", publishCmd.Flags().Lookup("broker"))
@@ -123,6 +134,8 @@ func init() {
 	viper.BindPFlag("quiet", publishCmd.Flags().Lookup("quiet"))
 	viper.BindPFlag("log_json", publishCmd.Flags().Lookup("log-json"))
 	viper.BindPFlag("stale_threshold", publishCmd.Flags().Lookup("stale-threshold"))
+	viper.BindPFlag("ha_discovery", publishCmd.Flags().Lookup("ha-discovery"))
+	viper.BindPFlag("ha_discovery_prefix", publishCmd.Flags().Lookup("ha-discovery-prefix"))
 
 	rootCmd.AddCommand(publishCmd)
 }
@@ -139,6 +152,8 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	quiet := viper.GetBool("quiet")
 	logJSON := viper.GetBool("log_json")
 	staleThreshold := viper.GetInt("stale_threshold")
+	haDiscovery := viper.GetBool("ha_discovery")
+	haDiscoveryPrefix := viper.GetString("ha_discovery_prefix")
 	clientID := viper.GetString("mqtt_client_id")
 	if clientID == "" {
 		hostname, _ := os.Hostname()
@@ -152,6 +167,9 @@ func runPublish(cmd *cobra.Command, args []string) error {
 		retain: retain,
 		log:    log,
 		stale:  lux.NewStaleDetector(staleThreshold, lux.WatchedInputRegisters()),
+
+		haDiscovery:       haDiscovery,
+		haDiscoveryPrefix: haDiscoveryPrefix,
 	}
 
 	// Connect to MQTT broker (stays connected across inverter reconnects).
@@ -185,6 +203,9 @@ func runPublish(cmd *cobra.Command, args []string) error {
 	port := viper.GetInt("port")
 
 	log.status(fmt.Sprintf("Connected: inverter=%s:%d broker=%s prefix=%s client_id=%s", host, port, broker, prefix, clientID))
+	if haDiscovery {
+		log.status(fmt.Sprintf("Home Assistant discovery enabled: discovery_prefix=%s", haDiscoveryPrefix))
+	}
 	log.status("Publishing (Ctrl-C to stop)...")
 
 	// Shutdown signal handling. The handler only closes the active inverter
@@ -356,6 +377,9 @@ type publisher struct {
 	stale  *lux.StaleDetector
 	now    func() time.Time // nil = time.Now
 
+	haDiscovery       bool   // publish HA discovery configs on connect
+	haDiscoveryPrefix string // HA discovery topic root, e.g. "homeassistant"
+
 	totalPublished int
 	staleSkipped   uint64
 	lastStaleLog   time.Time
@@ -387,9 +411,13 @@ func (p *publisher) publishOnline() bool {
 }
 
 // onConnect runs on every MQTT (re)connect. After an unclean disconnect the
-// broker holds our retained LWT "false"; republish the real state.
+// broker holds our retained LWT "false"; republish the real state. Discovery
+// configs are republished too, in case the broker lost its retained store.
 func (p *publisher) onConnect() {
 	p.publishOnline()
+	if p.haDiscovery {
+		p.publishDiscovery()
+	}
 }
 
 // await waits for a publish token and reports success. Failures and
