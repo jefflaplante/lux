@@ -44,6 +44,8 @@ var InputMQTTTopics = map[uint16][]MQTTMapping{
 		{"inverter_1/grid_frequency", fmtDiv100},
 		{"inverter_1/ac_output_frequency", fmtDiv100},
 	},
+	33:  {{"inverter_1/battery_energy_in", fmtDiv10}},
+	34:  {{"inverter_1/battery_energy_out", fmtDiv10}},
 	64:  {{"inverter_1/temperature", fmtDiv10}},
 	106: {{"inverter_1/battery_current", fmtDiv100}},
 }
@@ -84,12 +86,12 @@ var HoldingMQTTTopics = map[uint16][]MQTTMapping{
 
 // MasterFlagTopics maps bit positions in register 21 to Solar Assistant topic names.
 var MasterFlagTopics = map[int]string{
-	7:  "inverter_1/grid_charge",           // ACCharge
-	10: "inverter_1/forced_discharge",      // ForcedDischarge
-	11: "inverter_1/charge_priority",       // ChargePriority
-	15: "inverter_1/export_to_grid",        // FeedInGrid
-	0:  "inverter_1/eps_enable",            // EPS
-	6:  "inverter_1/grid_peak_shaving",     // GridOnPowerSS
+	7:  "inverter_1/grid_charge",            // ACCharge
+	10: "inverter_1/forced_discharge",       // ForcedDischarge
+	11: "inverter_1/charge_priority",        // ChargePriority
+	15: "inverter_1/export_to_grid",         // FeedInGrid
+	0:  "inverter_1/eps_enable",             // EPS
+	6:  "inverter_1/grid_peak_shaving",      // GridOnPowerSS
 	4:  "inverter_1/generator_peak_shaving", // AntiIsland (SA maps this differently)
 }
 
