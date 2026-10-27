@@ -108,6 +108,8 @@ The `publish` command streams inverter data to an MQTT broker using Solar Assist
 {prefix}/total/battery_state_of_charge/state   → "85"
 {prefix}/inverter_1/pv_power/state             → "4523"
 {prefix}/inverter_1/grid_power/state           → "-1200"
+{prefix}/inverter_1/battery_energy_in/state    → "23.2"  (i33 ÷10 kWh)
+{prefix}/inverter_1/battery_energy_out/state   → "19.9"  (i34 ÷10 kWh)
 {prefix}/inverter_1/grid_charge/state          → "true"
 {prefix}/inverter_1/online/state               → "true" (LWT: "false")
 {prefix}/inverter_1/last_seen/state            → "2024-03-26T12:34:56Z"

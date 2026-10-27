@@ -43,9 +43,11 @@ var InputMQTTTopics = map[uint16][]MQTTMapping{
 	8:  {{"inverter_1/pv_power_2", fmtRaw}},
 	9:  {{"inverter_1/pv_power_3", fmtRaw}},
 	12: {{"inverter_1/grid_voltage", fmtDiv10}},
-	15: {{"inverter_1/grid_frequency", fmtDiv100}},   // ac_output_frequency: see ComputedTopics
-	20: {{"inverter_1/ac_output_voltage", fmtDiv10}}, // EPS Voltage R
-	65: {{"inverter_1/temperature", fmtCtoF}},        // Radiator 1 Temp, °C → °F
+	15: {{"inverter_1/grid_frequency", fmtDiv100}},    // ac_output_frequency: see ComputedTopics
+	20: {{"inverter_1/ac_output_voltage", fmtDiv10}},  // EPS Voltage R
+	33: {{"inverter_1/battery_energy_in", fmtDiv10}},  // Echg_day, 0.1 kWh
+	34: {{"inverter_1/battery_energy_out", fmtDiv10}}, // Edischg_day, 0.1 kWh
+	65: {{"inverter_1/temperature", fmtCtoF}},         // Radiator 1 Temp, °C → °F
 	// Register 106 removed: inverter-estimated battery current is unreliable
 	// (reports non-zero when both BMS units read 0A). Battery current is now
 	// computed in ComputedTopics from charge/discharge power and voltage.
