@@ -447,7 +447,7 @@ Same structure as AC Charge. When enabled (reg 21 bit 11), solar charges battery
 
 | Reg | Name | Description |
 |-----|------|-------------|
-| 74 | Power | Charge rate % |
+| 74 | Power | Charge power (W, raw) |
 | 75 | SOC Limit | Target SOC % |
 | 76-81 | Periods 1-3 | Start/end times |
 
@@ -457,7 +457,7 @@ Same structure. When enabled (reg 21 bit 10), forces battery discharge during wi
 
 | Reg | Name | Description |
 |-----|------|-------------|
-| 82 | Power | Discharge rate % |
+| 82 | Power | Discharge power (W, raw) |
 | 83 | SOC Limit | Minimum SOC % |
 | 84-89 | Periods 1-3 | Start/end times |
 

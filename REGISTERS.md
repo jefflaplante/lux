@@ -104,7 +104,7 @@ These are the configuration registers. Read with ReadHold (3), write with WriteS
 
 | Reg | Name | Description | R/W |
 |-----|------|-------------|-----|
-| 74 | CHG_PRIORITY_POWER | Charge priority rate (%) | RW |
+| 74 | CHG_PRIORITY_POWER | Charge priority power (W, raw; 0–18000 on 18kPV) | RW |
 | 75 | CHG_PRIORITY_SOC_LIMIT | Charge priority SOC limit (%) | RW |
 | 76-77 | CHG_PRIORITY_TIME_0 | Period 0 start/end | RW |
 | 78-79 | CHG_PRIORITY_TIME_1 | Period 1 start/end | RW |
@@ -114,7 +114,7 @@ These are the configuration registers. Read with ReadHold (3), write with WriteS
 
 | Reg | Name | Description | R/W |
 |-----|------|-------------|-----|
-| 82 | FORCED_DISCHG_POWER | Forced discharge power rate (%) | RW |
+| 82 | FORCED_DISCHG_POWER | Forced discharge power (W, raw; 0–18000 on 18kPV) | RW |
 | 83 | FORCED_DISCHG_SOC_LIMIT | Forced discharge SOC floor (%) | RW |
 | 84-85 | FORCED_DISCHG_TIME_0 | Period 0 start/end | RW |
 | 86-87 | FORCED_DISCHG_TIME_1 | Period 1 start/end | RW |

@@ -129,8 +129,9 @@ type writeRule struct {
 }
 
 var (
-	rulePercent = writeRule{min: 0, max: 100}
-	ruleTime    = writeRule{time: true}
+	rulePercent  = writeRule{min: 0, max: 100}
+	ruleTime     = writeRule{time: true}
+	ruleWatts18k = writeRule{min: 0, max: 18000} // power rates are raw watts on this firmware (h82 live: 4000 = 4 kW), not percent
 )
 
 // writableHolding is the allowlist of holding registers that may be written,
@@ -147,10 +148,10 @@ var writableHolding = map[uint16]writeRule{
 	66: rulePercent, 67: rulePercent, // AC charge power %, SOC limit
 	68: ruleTime, 69: ruleTime, 70: ruleTime, 71: ruleTime, 72: ruleTime, 73: ruleTime,
 
-	74: rulePercent, 75: rulePercent, // charge priority power %, SOC limit
+	74: ruleWatts18k, 75: rulePercent, // charge priority power (W), SOC limit %
 	76: ruleTime, 77: ruleTime, 78: ruleTime, 79: ruleTime, 80: ruleTime, 81: ruleTime,
 
-	82: rulePercent, 83: rulePercent, // forced discharge power %, SOC floor
+	82: ruleWatts18k, 83: rulePercent, // forced discharge power (W), SOC floor %
 	84: ruleTime, 85: ruleTime, 86: ruleTime, 87: ruleTime, 88: ruleTime, 89: ruleTime,
 
 	103: rulePercent, // grid feed-in power limit %

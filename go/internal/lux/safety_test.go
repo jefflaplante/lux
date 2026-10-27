@@ -112,6 +112,12 @@ func TestValidateWrite(t *testing.T) {
 		{"master flags any bitmask", 21, 0xFFFF, false},
 		{"charge power 100%", 64, 100, false},
 		{"charge power 101%", 64, 101, true},
+		{"charge priority power 4000W", 74, 4000, false}, // watts, not % — inverter's own value
+		{"charge priority power 18001", 74, 18001, true},
+		{"forced discharge 120W", 82, 120, false},     // morning value
+		{"forced discharge 4000W", 82, 4000, false},   // inverter's own current value
+		{"forced discharge 18000W", 82, 18000, false}, // 18kPV max
+		{"forced discharge 18001W", 82, 18001, true},
 		{"discharge power 0%", 65, 0, false},
 		{"ac charge soc 80", 67, 80, false},
 		{"ac charge soc 150", 67, 150, true},

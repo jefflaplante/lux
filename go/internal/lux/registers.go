@@ -481,7 +481,7 @@ var HoldingRegisters = map[uint16]RegisterDef{
 	73: {"AC Charge Period 3 End", "AC charge window 3 end time", 0, "", "time", nil, nil, 0, 0, false},
 
 	// Charge Priority schedule (74-81)
-	74: {"Charge Priority Power", "Charge priority power rate", 0, "%", "", nil, nil, 0, 0, false},
+	74: {"Charge Priority Power", "Charge priority power", 0, "W", "", nil, nil, 0, 0, false}, // raw watts, NOT percent — live 4000=4kW=18kPV max; unit confirmed 2026-10-26
 	75: {"Charge Priority SOC Limit", "Charge priority target SOC", 0, "%", "", nil, nil, 0, 100, true},
 	76: {"Charge Priority Period 1 Start", "Charge priority window 1 start", 0, "", "time", nil, nil, 0, 0, false},
 	77: {"Charge Priority Period 1 End", "Charge priority window 1 end", 0, "", "time", nil, nil, 0, 0, false},
